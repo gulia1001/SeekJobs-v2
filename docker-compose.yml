@@ -1,0 +1,24 @@
+# Run the whole app:  docker compose up --build
+# Then open http://localhost:3001  (API: http://localhost:8001/api/health)
+services:
+  backend:
+    build: ./backend
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - ./pipeline/data:/data:ro   # job dataset produced by pipeline/run_pipeline.py
+    ports:
+      - "8001:8001"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8001
+    ports:
+      - "3001:3001"
+    depends_on:
+      - backend
