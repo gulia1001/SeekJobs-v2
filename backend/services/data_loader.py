@@ -19,6 +19,8 @@ from typing import Any
 
 import pandas as pd
 
+from services.skills import base_key, keyed, score_job, skill_key
+
 log = logging.getLogger("seekjobs.loader")
 
 # ── paths ──────────────────────────────────────────────────────────────────
@@ -104,6 +106,13 @@ def build_salary_label(row: pd.Series) -> str:
 # ── load & prepare ──────────────────────────────────────────────────────────
 @lru_cache(maxsize=1)
 def load_jobs() -> pd.DataFrame:
+    df = _load_raw()
+    if not df.empty:
+        df["match_skills"] = df.apply(_match_skills, axis=1, result_type="reduce")
+    return df
+
+
+def _load_raw() -> pd.DataFrame:
     if MAIN_CSV.exists():
         log.info("Loading main CSV: %s", MAIN_CSV)
         return _load_main()
@@ -115,6 +124,13 @@ def load_jobs() -> pd.DataFrame:
         return _load_enriched()
     log.error("No job data found under %s — run pipeline/run_pipeline.py or set DATA_DIR", DATA_DIR)
     return pd.DataFrame()
+
+
+def _match_skills(row: pd.Series) -> dict[str, str]:
+    """Skills used for scoring: hard skills + tech stack (soft skills like
+    'communication' are left out — CVs rarely list them, so they'd only lower scores)."""
+    hard = safe_parse_list(row.get("hard_skills_clean")) + safe_parse_list(row.get("tech_stack_clean"))
+    return keyed(hard or row.get("skills_all_clean_list") or [])
 
 
 def _load_main() -> pd.DataFrame:
@@ -223,15 +239,16 @@ def get_vocab() -> list[str]:
     return get_known_skills()
 
 
-# ── jaccard matching (identical to app/data/loader.py) ─────────────────────
-def jaccard_score(a: list[str], b: list[str]) -> float:
-    sa = {s.casefold() for s in a if s}
-    sb = {s.casefold() for s in b if s}
-    if not sa or not sb:
-        return 0.0
-    return len(sa & sb) / len(sa | sb)
+@lru_cache(maxsize=1)
+def _demand_rank() -> dict[str, int]:
+    """skill key -> position in the market-frequency list (0 = most demanded)."""
+    rank: dict[str, int] = {}
+    for i, s in enumerate(get_known_skills()):
+        rank.setdefault(skill_key(s), i)
+    return rank
 
 
+# ── matching ────────────────────────────────────────────────────────────────
 def find_matching_vacancies(
     candidate_skills: list[str],
     *,
@@ -241,9 +258,11 @@ def find_matching_vacancies(
     top_n: int = 5,
     df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """
-    Direct port of app/data/loader.py::find_matching_vacancies.
-    Returns ranked DataFrame with match_score, matched_skills, missing_skills.
+    """Rank jobs for a candidate. categories=None searches every category.
+
+    Returns the top_n rows with match_score (0–1 share of the job's skills the
+    candidate has), matched_skills and missing_skills (most in-demand first).
+    Jobs where the candidate has none of the skills are dropped.
     """
     if df is None:
         df = load_jobs()
@@ -264,21 +283,22 @@ def find_matching_vacancies(
     if filtered.empty:
         return filtered
 
-    cand_lower = {s.casefold() for s in candidate_skills}
+    user_keys = set(keyed(candidate_skills))
+    demand = _demand_rank()
+    scores = [score_job(user_keys, skills) for skills in filtered["match_skills"]]
 
     filtered = filtered.copy()
-    filtered["match_score"] = filtered["skills_all_clean_list"].apply(
-        lambda skills: jaccard_score(candidate_skills, skills)
-    )
-    filtered["matched_skills"] = filtered["skills_all_clean_list"].apply(
-        lambda skills: sorted({s for s in skills if s.casefold() in cand_lower})
-    )
-    filtered["missing_skills"] = filtered["skills_all_clean_list"].apply(
-        lambda skills: sorted({s for s in skills if s.casefold() not in cand_lower})[:8]
-    )
+    filtered["match_score"] = [s[0] for s in scores]
+    filtered["_rank_score"] = [s[1] for s in scores]
+    filtered["matched_skills"] = [s[2] for s in scores]
+    filtered["missing_skills"] = [
+        sorted(s[3], key=lambda name: demand.get(skill_key(name), len(demand)))[:8] for s in scores
+    ]
+    filtered["_n_matched"] = [len(s[2]) for s in scores]
+    filtered = filtered[filtered["_n_matched"] > 0]
 
-    sort_cols = ["match_score", "salary_avg_clean"] + (
-        ["skills_count"] if "skills_count" in filtered.columns else []
+    sort_cols = ["_rank_score", "_n_matched"] + (
+        ["salary_avg_clean"] if "salary_avg_clean" in filtered.columns else []
     )
     return (
         filtered
@@ -307,9 +327,12 @@ def get_market_salary(category: str, df: pd.DataFrame | None = None) -> dict:
     }
 
 
-# ── CV text analysis (ported from app/data/loader.py) ──────────────────────
-_SHORT_ALLOW = {"ai", "bi", "ci", "ml", "nlp", "qa", "ui", "ux",
-                "go", "c#", "c++", "1c", "hr", "r"}
+# ── CV text analysis ────────────────────────────────────────────────────────
+# 1–2 letter words that are real skills (others like "a", "в" are ignored)
+_SHORT_ALLOW = {"ai", "bi", "ci", "ml", "nlp", "qa", "ui", "ux", "js",
+                "go", "c#", "c++", "1c", "1с", "hr", "r"}
+_WORD = re.compile(r"[\w#+.]+")
+_MAX_PHRASE_WORDS = 4
 
 
 def extract_skills_from_text(
@@ -317,27 +340,39 @@ def extract_skills_from_text(
     known_skills: list[str] | None = None,
     max_skills: int = 40,
 ) -> list[str]:
-    """Exact port of app/data/loader.py::extract_known_skills_from_text."""
+    """Find known skills in free text (CV, repo summary), in order of appearance.
+
+    Every 1–4 word phrase in the text is normalized with skill_key(), so
+    'Postgres', 'CI/CD', 'scikit-learn' or 'Node.js' match the dataset's
+    'PostgreSQL', 'CI/CD', 'scikit-learn', 'NodeJS'.
+    """
     if not text.strip():
         return []
     if known_skills is None:
         known_skills = get_vocab()
-    lowered = text.casefold()
+    vocab: dict[str, str] = {}
+    for s in known_skills:
+        vocab.setdefault(skill_key(s), s)
+    vocab.pop("", None)
+
+    words = [w.strip(".") for w in _WORD.findall(text)]
+    words = [w for w in words if w]
     found: list[str] = []
     seen: set[str] = set()
-    for skill in sorted(known_skills, key=len, reverse=True):
-        if len(found) >= max_skills:
-            break
-        token = skill.strip()
-        if not token:
-            continue
-        norm = token.casefold()
-        if len(norm) <= 2 and norm not in _SHORT_ALLOW:
-            continue
-        if re.search(rf"(?<!\w){re.escape(norm)}(?!\w)", lowered):
-            if norm not in seen:
-                seen.add(norm)
-                found.append(token)
+    for i in range(len(words)):
+        for n in range(_MAX_PHRASE_WORDS, 0, -1):  # longest phrase first: "Spring Boot" before "Spring"
+            if i + n > len(words):
+                continue
+            phrase = " ".join(words[i:i + n])
+            raw = base_key(phrase)
+            if len(raw) <= 2 and raw not in _SHORT_ALLOW:
+                continue
+            key = skill_key(phrase)
+            if key in vocab and key not in seen:
+                seen.add(key)
+                found.append(vocab[key])
+                if len(found) >= max_skills:
+                    return found
     return found
 
 

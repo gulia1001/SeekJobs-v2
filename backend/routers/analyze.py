@@ -1,157 +1,139 @@
 """POST /api/analyze — parse profile sources, match jobs, return results."""
+import asyncio
 import logging
-import os
+import re
 
-from fastapi import APIRouter, Form, File, UploadFile, HTTPException, Request
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from services.cv_parser import parse_cv
+from services.data_loader import extract_skills_from_text, get_vocab, summarize_cv_text
 from services.github_service import analyze_github
-from services.linkedin_service import parse_linkedin
 from services.job_matcher import match_jobs
-from services.data_loader import (
-    extract_skills_from_text,
-    summarize_cv_text,
-    get_vocab,
-)
+from services.linkedin_service import parse_linkedin
+from services.skills import dedupe_skills
 
 router = APIRouter()
 log = logging.getLogger("seekjobs.analyze")
 
+MAX_CV_BYTES = 5 * 1024 * 1024
+ALLOWED_CV_TYPES = {"pdf", "docx", "txt"}
+
+
+def parse_salary(value: str) -> float | None:
+    """'500 000', '500000₸', '500k' -> number; anything unreadable -> None."""
+    text = value.strip().lower().replace(",", ".")
+    m = re.match(r"^(\d[\d\s.]*)\s*(k|к|тыс)?", text)
+    if not m:
+        return None
+    digits = re.sub(r"\s", "", m.group(1))
+    try:
+        number = float(digits)
+    except ValueError:
+        return None
+    if m.group(2):
+        number *= 1000
+    return number if number > 0 else None
+
+
+async def _read_cv(cv_file: UploadFile) -> str:
+    ext = cv_file.filename.rsplit(".", 1)[-1].lower() if "." in cv_file.filename else ""
+    if ext not in ALLOWED_CV_TYPES:
+        raise HTTPException(415, "Please upload your CV as PDF, Word (.docx) or .txt. "
+                                 "Old .doc files: open in Word and 'Save as' .docx.")
+    if cv_file.size and cv_file.size > MAX_CV_BYTES:
+        raise HTTPException(413, "CV file is larger than 5 MB.")
+    content = await cv_file.read()
+    if len(content) > MAX_CV_BYTES:
+        raise HTTPException(413, "CV file is larger than 5 MB.")
+    text = await asyncio.to_thread(parse_cv, content, cv_file.filename)
+    if text.startswith("[") and "parse error" in text[:30]:
+        log.warning("CV parse failed: %s", text)
+        return ""
+    return text
+
 
 @router.post("/analyze")
-@router.post("/analyze/")
-@router.get("/analyze")
-@router.get("/analyze/")
-@router.post("/process")
-@router.get("/process")
 async def analyze(
     cv_file: UploadFile | None = File(None),
     linkedin_url: str = Form(""),
     github_url: str = Form(""),
     preferred_salary: str = Form(""),
     target_roles: list[str] = Form([]),
-    request: Request = None,
 ):
-    if request and request.method == "GET":
-        return {"error": "Please use POST to analyze your profile.", "detected_method": "GET"}
+    github_url, linkedin_url = github_url.strip(), linkedin_url.strip()
+    has_cv = bool(cv_file and cv_file.filename)
+    if not (has_cv or github_url or linkedin_url):
+        raise HTTPException(422, "Upload a CV or provide a GitHub or LinkedIn link.")
+
     all_skills: list[str] = []
     profile_name: str | None = None
-    github_summary: str = ""
-    linkedin_summary: str = ""
-    cv_text: str = ""
+    cv_text = ""
     gh: dict = {}  # GitHub result — stays empty if no GitHub URL was given
     li: dict = {}  # LinkedIn result — stays empty if no LinkedIn URL was given
 
-    # Pre-load known skills vocabulary once (cached)
     known = get_vocab()
-    log.info("Known skills vocabulary: %d terms", len(known))
 
     # ── 1. CV ─────────────────────────────────────────────────────────────
-    if cv_file and cv_file.filename:
-        log.info("Parsing CV: %s (%d bytes)", cv_file.filename, cv_file.size or 0)
-        content = await cv_file.read()
-        cv_text = parse_cv(content, cv_file.filename)
-        if cv_text.startswith("[") and "parse error" in cv_text[:30]:
-            log.warning("CV parse failed: %s", cv_text)
-            cv_text = ""
-        cv_data = summarize_cv_text(cv_text, known)
-        skills_from_cv = cv_data.get("skills", [])
-        log.info("CV skills extracted: %d  preview: %s", len(skills_from_cv), skills_from_cv[:8])
-        all_skills.extend(skills_from_cv)
+    if has_cv:
+        cv_text = await _read_cv(cv_file)
+        cv_skills = summarize_cv_text(cv_text, known).get("skills", [])
+        log.info("CV %s: %d skills  preview: %s", cv_file.filename, len(cv_skills), cv_skills[:8])
+        all_skills.extend(cv_skills)
 
-    # ── 2. GitHub ──────────────────────────────────────────────────────────
-    if github_url.strip():
-        log.info("Analyzing GitHub: %s", github_url.strip())
-        gh = analyze_github(github_url.strip())
+    # ── 2. GitHub (sync HTTP calls → run off the event loop) ───────────────
+    if github_url:
+        gh = await asyncio.to_thread(analyze_github, github_url)
+        if gh.get("error"):
+            log.warning("GitHub error: %s", gh["error"])
         gh_skills = gh.get("skills", [])
-        gh_error = gh.get("error")
-        if gh_error:
-            log.warning("GitHub error: %s", gh_error)
-        else:
-            log.info("GitHub skills: %d  summary: %s", len(gh_skills), gh.get("summary", "")[:80])
-        # Also scan GitHub repo descriptions through the known-skills vocabulary
         if gh.get("summary"):
-            extra = extract_skills_from_text(gh["summary"], known)
-            log.info("GitHub text → extra skills: %s", extra[:6])
-            gh_skills = list({s.casefold(): s for s in gh_skills + extra}.values())
+            gh_skills += extract_skills_from_text(gh["summary"], known)
         all_skills.extend(gh_skills)
-        github_summary = gh.get("summary", "")
-        if not profile_name:
-            profile_name = gh.get("username")
+        profile_name = profile_name or gh.get("username")
 
     # ── 3. LinkedIn ────────────────────────────────────────────────────────
-    if linkedin_url.strip():
-        log.info("Parsing LinkedIn: %s", linkedin_url.strip())
-        li = await parse_linkedin(linkedin_url.strip())
-        li_error = li.get("error")
-        if li_error:
-            log.warning("LinkedIn error: %s", li_error)
+    if linkedin_url:
+        li = await parse_linkedin(linkedin_url)
+        if li.get("error"):
+            log.warning("LinkedIn error: %s", li["error"])
         li_skills = li.get("skills", [])
-        log.info("LinkedIn skills: %d  name: %s", len(li_skills), li.get("fullName"))
-        # Also scan experience text for vocabulary matches
-        exp_text = " ".join(
-            f"{e.get('title','')} {e.get('company','')}" for e in li.get("experience", [])
-        )
-        if exp_text:
-            extra = extract_skills_from_text(exp_text, known)
-            log.info("LinkedIn exp text → extra skills: %s", extra[:6])
-            li_skills = list({s.casefold(): s for s in li_skills + extra}.values())
+        exp_text = " ".join(f"{e.get('title', '')} {e.get('company', '')}" for e in li.get("experience", []))
+        if exp_text.strip():
+            li_skills += extract_skills_from_text(exp_text, known)
         all_skills.extend(li_skills)
-        linkedin_summary = li.get("headline") or li.get("fullName") or ""
-        if not profile_name:
-            profile_name = li.get("fullName")
+        profile_name = profile_name or li.get("fullName")
 
-    # ── Deduplicate ────────────────────────────────────────────────────────
-    seen: set[str] = set()
-    unique_skills: list[str] = []
-    for s in all_skills:
-        key = s.lower().strip()
-        if key and key not in seen:
-            seen.add(key)
-            unique_skills.append(s)
-
-    log.info(
-        "Total unique skills: %d  sources: cv=%s github=%s linkedin=%s",
-        len(unique_skills),
-        bool(cv_file and cv_file.filename),
-        bool(github_url.strip()),
-        bool(linkedin_url.strip()),
-    )
+    # 'Postgres' and 'PostgreSQL' count once
+    unique_skills = dedupe_skills(all_skills)
+    log.info("Total unique skills: %d  sources: cv=%s github=%s linkedin=%s",
+             len(unique_skills), has_cv, bool(github_url), bool(linkedin_url))
 
     if not unique_skills:
         tried = ", ".join(filter(None, [
-            f"CV ({cv_file.filename})" if cv_file and cv_file.filename else "",
-            f"GitHub ({github_url.strip()[:40]})" if github_url.strip() else "",
-            "LinkedIn" if linkedin_url.strip() else "",
-        ])) or "no sources provided"
+            f"CV ({cv_file.filename})" if has_cv else "",
+            f"GitHub ({github_url[:40]})" if github_url else "",
+            "LinkedIn" if linkedin_url else "",
+        ]))
         raise HTTPException(
-            status_code=422,
-            detail=f"Could not extract skills from: {tried}. "
-                   "Check the GitHub username exists, the LinkedIn URL is public, "
-                   "or upload a CV file.",
+            422,
+            f"Could not extract skills from: {tried}. Check that the GitHub username exists, "
+            "the LinkedIn URL is public, or upload a CV that lists your skills.",
         )
 
     # ── 4. Match ───────────────────────────────────────────────────────────
-    salary_val = float(preferred_salary) if preferred_salary.strip() else None
-    log.info("Matching: roles=%s  salary=%s", target_roles, salary_val)
-    by_role = await match_jobs(
-        user_skills=unique_skills,
-        target_roles=target_roles,
-        preferred_salary=salary_val,
-        top_n=5,
-    )
-
-    log.info("Result: %d roles  total_matches=%d",
-             len(by_role), sum(len(v["matches"]) for v in by_role.values()))
+    roles = [r for r in target_roles if r.strip()]
+    salary_val = parse_salary(preferred_salary)
+    by_role = await match_jobs(user_skills=unique_skills, target_roles=roles, preferred_salary=salary_val)
+    log.info("Result: %d roles  total_matches=%d", len(by_role), sum(len(v["matches"]) for v in by_role.values()))
 
     return {
         "profile": {
             "name": profile_name,
             "skills": unique_skills,
-            "github_summary": github_summary,
-            "linkedin_summary": linkedin_summary,
-            "github_url": github_url.strip(),
-            "linkedin_url": linkedin_url.strip(),
+            "github_summary": gh.get("summary", ""),
+            "linkedin_summary": li.get("headline") or li.get("fullName") or "",
+            "github_url": github_url,
+            "linkedin_url": linkedin_url,
             "top_repos": gh.get("top_repos", []),
             "certifications": li.get("certifications", []),
             # sent back by the client to /cv/generate so the tailored CV uses real facts

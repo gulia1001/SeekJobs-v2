@@ -1,0 +1,9 @@
+id,title_final,company_clean,city_norm,category_filled,level_filled,work_format_norm,salary_from_clean,salary_to_clean,salary_avg_clean,currency_clean,hard_skills_clean,soft_skills_clean,tech_stack_clean,source,source_url,description_clean_v2,dedup_keep_for_analytics,usable_for_salary_analytics
+j1,Backend Developer (Python),DemoTech,Almaty,software_engineering,middle,hybrid,600000,900000,750000,KZT,"[""Python"", ""FastAPI"", ""PostgreSQL"", ""Docker""]","[""Communication"", ""Teamwork""]",[],hh_kz,https://hh.kz/vacancy/1,Build REST APIs.,True,True
+j2,Python Developer,Steppe Soft,Astana,software_engineering,junior,office,400000,500000,450000,KZT,"[""Python"", ""Django""]",[],"[""Redis""]",hh_kz,https://hh.kz/vacancy/2,Django backend.,True,True
+j3,Frontend Developer,Nomad UI,Almaty,software_engineering,middle,remote,600000,800000,700000,KZT,"[""React.js"", ""TypeScript"", ""CSS""]",[],[],kolesa_jobs,https://kolesa.kz/job/3,React SPA.,True,True
+j4,Data Analyst,Bayterek Data,Astana,analytics,junior,office,400000,600000,500000,KZT,"[""SQL"", ""Python"", ""Power BI""]","[""Attention to detail""]",[],kaspi_jobs,https://kaspi.kz/job/4,Dashboards.,True,True
+j5,DevOps Engineer,CloudKZ,Almaty,devops,senior,remote,1000000,1400000,1200000,KZT,"[""Kubernetes"", ""Docker"", ""Terraform"", ""AWS""]",[],[],hh_kz,https://hh.kz/vacancy/5,Run k8s clusters.,True,True
+j6,Программист 1С,ТОО Ромашка,Алматы,software_engineering,middle,office,,,,KZT,"[""1\u0421""]",[],[],telegram,,Доработка конфигураций 1С.,True,False
+j7,Hidden duplicate of Backend Developer,DemoTech,Almaty,software_engineering,middle,hybrid,600000,900000,750000,KZT,"[""Python"", ""FastAPI"", ""PostgreSQL"", ""Docker""]",[],[],telegram,https://t.me/jobs/7,Duplicate post.,False,False
+j8,ML Engineer,Qazaq AI,Astana,data,middle,hybrid,1200000,1800000,1500000,KZT,"[""Python"", ""PyTorch"", ""Machine Learning"", ""SQL""]",[],[],hh_kz,https://hh.kz/vacancy/8,Train models.,True,True

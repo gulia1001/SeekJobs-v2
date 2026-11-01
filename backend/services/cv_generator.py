@@ -2,6 +2,8 @@
 import json
 import logging
 import os
+import re
+
 from groq import AsyncGroq
 
 log = logging.getLogger("seekjobs.cv")
@@ -16,7 +18,7 @@ async def generate_tailored_cv(
 ) -> dict:
     groq_key = os.getenv("GROQ_API_KEY")
     if not groq_key:
-        return _fallback_cv(job_title, job_skills, user_profile)
+        return _fallback_cv(job_title, job_skills, user_profile, cv_text=cv_text)
 
     client = AsyncGroq(api_key=groq_key)
 
@@ -43,7 +45,7 @@ async def generate_tailored_cv(
     prompt = f"""You are a world-class executive CV writer. Create a high-impact, ONE-PAGE tailored CV.
 
 CANDIDATE DATA:
-Name: {user_name}
+Name: {user_name} (if the CV text contains the candidate's full name, use that name instead)
 {combined_info}
 GitHub: {github_url}
 Top Projects:\n{repos_str}
@@ -71,7 +73,7 @@ TRUTHFULNESS RULES (most important — a CV with invented facts hurts the candid
 
 OUTPUT JSON STRUCTURE:
 {{
-  "name": "{user_name}",
+  "name": "...",
   "role": "{job_title}",
   "email": "",
   "github": "{github_url}",
@@ -128,11 +130,40 @@ LATEX TEMPLATE REQUIREMENTS:
         return cv_data
     except Exception as e:
         log.warning("AI CV generation failed, using fallback: %s", e)
-        return _fallback_cv(job_title, job_skills, user_profile, github_url, linkedin_url)
+        return _fallback_cv(job_title, job_skills, user_profile, github_url, linkedin_url, cv_text=cv_text)
 
 
-def _fallback_cv(job_title: str, job_skills: list[str], user_profile: dict, github_url: str = "", linkedin_url: str = "") -> dict:
-    name = user_profile.get("name") or "Candidate"
+_NOT_A_NAME = re.compile(
+    r"curriculum|vitae|resume|резюме|\bcv\b|developer|engineer|analyst|manager|designer|specialist|intern"
+    r"|разработчик|программист|инженер|аналитик|менеджер|дизайнер|специалист|стажер|стажёр",
+    re.IGNORECASE,
+)
+
+
+def _guess_name(cv_text: str) -> str:
+    """CVs usually start with the person's name: 2–4 words, letters only.
+    Header lines like 'Curriculum Vitae' are skipped; a job title is not a name."""
+    for line in cv_text.splitlines():
+        line = line.strip()
+        if not line or re.fullmatch(r"(curriculum vitae|resume|cv|резюме)\W*", line, re.IGNORECASE):
+            continue
+        words = line.split()
+        if (2 <= len(words) <= 4 and not _NOT_A_NAME.search(line)
+                and all(re.fullmatch(r"[^\W\d_]+(-[^\W\d_]+)?\.?", w) for w in words)):
+            return line
+        return ""
+    return ""
+
+
+def _find_email(cv_text: str) -> str:
+    m = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", cv_text)
+    return m.group(0) if m else ""
+
+
+def _fallback_cv(job_title: str, job_skills: list[str], user_profile: dict, github_url: str = "",
+                 linkedin_url: str = "", cv_text: str = "") -> dict:
+    """CV built without the LLM (no API key, or the call failed) — only real data."""
+    name = _guess_name(cv_text) or user_profile.get("name") or "Candidate"
     # Only the candidate's own skills — the ones this job asks for come first.
     wanted = {s.casefold() for s in job_skills}
     own = list(dict.fromkeys(user_profile.get("skills", [])))
@@ -141,7 +172,7 @@ def _fallback_cv(job_title: str, job_skills: list[str], user_profile: dict, gith
     cv_data = {
         "name": name,
         "role": job_title,
-        "email": user_profile.get("email") or "",
+        "email": user_profile.get("email") or _find_email(cv_text),
         "github": github_url or user_profile.get("github_url") or "",
         "linkedin": linkedin_url or user_profile.get("linkedin_url") or "",
         "summary": (

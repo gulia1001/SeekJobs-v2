@@ -14,6 +14,9 @@ from services.data_loader import (
 
 log = logging.getLogger("seekjobs.matcher")
 
+# result key used when the user picked no target role
+BEST_MATCHES = "best_matches"
+
 
 def _salary_status(expected: float | None, market_avg: float) -> str:
     if not expected or not market_avg:
@@ -23,6 +26,10 @@ def _salary_status(expected: float | None, market_avg: float) -> str:
     if expected > market_avg * 1.1:
         return "above"
     return "at"
+
+
+def _clean_url(value) -> str:
+    return value.strip() if isinstance(value, str) and value.strip().startswith("http") else ""
 
 
 def _row_to_job(row: pd.Series) -> dict:
@@ -50,6 +57,7 @@ def _row_to_job(row: pd.Series) -> dict:
         "currency": str(row.get("currency_clean", "KZT")),
         "skills": list(row.get("skills_all_clean_list") or []),
         "source": str(row.get("source", "")),
+        "url": _clean_url(row.get("source_url")),
         "salary_display": build_salary_label(row),
     }
 
@@ -58,11 +66,12 @@ async def match_jobs(
     user_skills: list[str],
     target_roles: list[str],
     preferred_salary: float | None = None,
-    top_n: int = 5,
+    top_n: int = 10,
 ) -> dict:
-    """
-    Returns {role: {market_avg_salary, currency, matches: [...]}} for each role.
-    Uses the same jaccard_score + find_matching_vacancies logic as the Streamlit app.
+    """Returns {role: {market_avg_salary, currency, matches: [...]}} for each role.
+
+    With no target roles, searches all categories and returns one group
+    under BEST_MATCHES.
     """
     df = load_jobs()
 
@@ -75,16 +84,17 @@ async def match_jobs(
         log.warning("No job data available — CSVs not found or empty")
         return {}
 
-    roles = target_roles if target_roles else ["backend"]
+    roles = target_roles if target_roles else [BEST_MATCHES]
     result: dict = {}
 
     for role in roles:
-        market = get_market_salary(role, df)
+        category = None if role == BEST_MATCHES else role
+        market = get_market_salary(category or "", df)
         log.info("Role=%s  market_avg=%s  market_count=%s", role, market["avg"], market["count"])
 
         matches_df = find_matching_vacancies(
             user_skills,
-            categories=[role],
+            categories=[category] if category else None,
             salary_min=None,
             top_n=top_n,
             df=df,
@@ -117,6 +127,7 @@ async def match_jobs(
                 "reason": "",  # filled by LLM below
                 "skills_matched": matched,
                 "skills_missing": missing,
+                "skills_required": len(row.get("match_skills") or {}),
                 "salary_comparison": {
                     "user_expected": preferred_salary,
                     "job_avg": sal_avg,
@@ -136,11 +147,16 @@ async def match_jobs(
     return result
 
 
+def _default_reason(m: dict) -> str:
+    return f"You have {len(m['skills_matched'])} of {m['skills_required']} skills this job asks for."
+
+
 async def _enrich_reasons(matches: list[dict], user_skills: list[str], role: str) -> list[dict]:
+    role_label = "any IT role" if role == BEST_MATCHES else role.replace("_", " ")
     groq_key = os.getenv("GROQ_API_KEY")
     if not groq_key or not matches:
         for m in matches:
-            m["reason"] = f"Matched {len(m['skills_matched'])} skill(s) for {role}."
+            m["reason"] = _default_reason(m)
         return matches
 
     try:
@@ -153,23 +169,23 @@ async def _enrich_reasons(matches: list[dict], user_skills: list[str], role: str
         )
         prompt = (
             f"User skills: {', '.join(user_skills[:15])}.\n"
-            f"Target role: {role}.\n\n"
+            f"Target role: {role_label}.\n\n"
             f"Write ONE sentence (≤20 words) for each match explaining why it fits:\n{lines}\n\n"
             f"Reply with exactly {len(matches)} numbered lines like: '1. ...'  '2. ...' etc."
         )
         resp = await client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,
+            max_tokens=700,
             temperature=0.4,
         )
         reply_lines = resp.choices[0].message.content.strip().split("\n")
         for m in matches:
             line = next((l for l in reply_lines if l.startswith(f"{m['rank']}.")), "")
-            m["reason"] = line.split(".", 1)[-1].strip() if line else f"Good {role} match."
+            m["reason"] = line.split(".", 1)[-1].strip() if line else _default_reason(m)
     except Exception as e:
         log.warning("Groq reason enrichment failed: %s", e)
         for m in matches:
-            m["reason"] = f"Matched {len(m['skills_matched'])} skill(s) for {role}."
+            m["reason"] = _default_reason(m)
 
     return matches

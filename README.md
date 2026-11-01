@@ -39,18 +39,39 @@ SeekJobs-v2/
 
 Open http://localhost:3001. API health check: http://localhost:8001/api/health
 
+## Tests
+
+```bash
+cd backend && pip install -r requirements.txt -r requirements-dev.txt && pytest -q
+```
+
+Tests use a small fake dataset in `backend/tests/fixtures/` (no real data or API keys
+needed). GitHub Actions (`.github/workflows/ci.yml`) runs backend tests, the frontend
+production build and pipeline checks on every push and pull request.
+
+## How matching works
+
+- Skill names are normalized, so `Postgres` = `PostgreSQL`, `React.js` = `React`,
+  `1С` = `1C`, `CI/CD` = `CI CD` (`backend/services/skills.py`).
+- Score = share of the **job's** skills you have (hard skills + tech stack; soft skills
+  are ignored). Having many other skills never lowers your score.
+- Ranking slightly prefers jobs with more evidence (5 of 5 skills beats 1 of 1).
+- Missing skills are listed most-in-demand first.
+- No role selected → searches all categories ("Best matches for you").
+
 ## API
 
 | Method | Path | What it does |
 |---|---|---|
 | GET | `/api/jobs` | Paginated vacancies (`page`, `limit`, `category`, `level`, `format`) |
-| POST | `/api/analyze` | Form: `cv_file`, `github_url`, `linkedin_url`, `preferred_salary`, `target_roles[]` → skills + top matches per role |
-| POST | `/api/cv/generate` | Tailored CV (JSON + LaTeX) for one job |
+| POST | `/api/analyze` | Form: `cv_file` (PDF/DOCX/TXT, ≤5 MB), `github_url`, `linkedin_url`, `preferred_salary`, `target_roles[]` (optional) → skills + top matches per role |
+| POST | `/api/cv/generate` | Tailored CV (JSON + LaTeX) for one job — uses only facts from the CV/profile |
+| POST | `/api/cv/export` | `{cv, format: "pdf" \| "docx"}` → downloadable file (real text, Cyrillic supported) |
 
 ## Roadmap
 
 - **Phase 0 — cleanup** ✅ structure, secrets out of git, CV-only crash fixed, tailored CV uses real CV text
-- **Phase 1 — MVP works end to end:** better matching score, PDF/DOCX output, config & CORS, tests + CI
+- **Phase 1 — MVP works end to end** ✅ new matching score + skill synonyms, no-role search, PDF/Word export, job links, upload limits, CORS config, tests + CI
 - **Phase 2 — data engine:** daily fresh jobs in Postgres, legal data sources, LinkedIn PDF import instead of scraping
 - **Phase 3 — product:** accounts, application tracker, RU/KZ/EN, Telegram bot
 - **Phase 4–5 — validate & monetize:** pilots with universities/bootcamps, freemium + B2B licences

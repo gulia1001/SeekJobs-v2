@@ -23,6 +23,7 @@ export interface Match {
   reason: string
   skills_matched: string[]
   skills_missing: string[]
+  skills_required: number
   salary_comparison: {
     user_expected?: number
     job_avg?: number

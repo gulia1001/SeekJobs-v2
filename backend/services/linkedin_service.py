@@ -3,12 +3,14 @@
 TODO (roadmap Phase 2): replace scraping with "upload your LinkedIn PDF export".
 Scraping LinkedIn breaks its terms of service and is a legal risk for the business.
 """
+import asyncio
 import os
 
 
 async def parse_linkedin(linkedin_url: str) -> dict:
     """Return cleaned profile data, {} if not configured, or {"error": ...}."""
-    return _try_apify_sdk(linkedin_url) or {}
+    # the Apify call blocks for up to a minute — keep it off the event loop
+    return await asyncio.to_thread(_try_apify_sdk, linkedin_url) or {}
 
 
 def _try_apify_sdk(url: str) -> dict:

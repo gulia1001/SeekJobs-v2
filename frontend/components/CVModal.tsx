@@ -1,6 +1,20 @@
 'use client'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import type { GeneratedCV } from '@/lib/types'
+import { exportCV } from '@/lib/api'
+
+function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+const safe = (s: string) => s.trim().replace(/[\\/:*?"<>|\s]+/g, '_')
 
 interface Props {
   cv: GeneratedCV | null
@@ -16,17 +30,26 @@ export default function CVModal({ cv, jobTitle, company, onClose }: Props) {
     return () => window.removeEventListener('keydown', handleKey)
   }, [onClose])
 
+  const [downloading, setDownloading] = useState<'' | 'pdf' | 'docx'>('')
+  const [downloadError, setDownloadError] = useState('')
+  const fileBase = `CV_${safe(cv?.name || 'CV')}_${safe(jobTitle)}`
+
+  const download = async (format: 'pdf' | 'docx') => {
+    if (!cv) return
+    setDownloading(format)
+    setDownloadError('')
+    try {
+      saveBlob(await exportCV(cv, format), `${fileBase}.${format}`)
+    } catch (e: unknown) {
+      setDownloadError(e instanceof Error ? e.message : 'Download failed')
+    } finally {
+      setDownloading('')
+    }
+  }
+
   const downloadTex = () => {
     if (!cv?.latex) return
-    const blob = new Blob([cv.latex], { type: 'text/plain' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `CV_${cv.name?.replace(/\s+/g, '_')}_${jobTitle.replace(/\s+/g, '_')}.tex`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
+    saveBlob(new Blob([cv.latex], { type: 'text/plain' }), `${fileBase}.tex`)
   }
 
   return (
@@ -48,17 +71,28 @@ export default function CVModal({ cv, jobTitle, company, onClose }: Props) {
                 <button
                   className="btn-primary"
                   style={{ flex: 2, padding: '10px', fontSize: 12 }}
-                  onClick={() => window.print()}
+                  onClick={() => download('pdf')}
+                  disabled={downloading !== ''}
                 >
-                  📄 Print / Save PDF
+                  {downloading === 'pdf' ? 'Preparing…' : '⬇ Download PDF'}
                 </button>
                 <button
                   className="btn-ghost"
                   style={{ flex: 1, padding: '10px', fontSize: 12 }}
-                  onClick={downloadTex}
+                  onClick={() => download('docx')}
+                  disabled={downloading !== ''}
                 >
-                  💾 .TEX
+                  {downloading === 'docx' ? 'Preparing…' : '⬇ Word'}
                 </button>
+                {cv.latex && (
+                  <button
+                    className="btn-ghost"
+                    style={{ flex: 1, padding: '10px', fontSize: 12 }}
+                    onClick={downloadTex}
+                  >
+                    .TEX
+                  </button>
+                )}
                 <button
                   className="btn-ghost"
                   style={{ flex: 1, padding: '10px', fontSize: 12, opacity: 0.7 }}
@@ -67,6 +101,9 @@ export default function CVModal({ cv, jobTitle, company, onClose }: Props) {
                   Close
                 </button>
               </div>
+              {downloadError && (
+                <div style={{ color: 'var(--accent)', fontSize: 12, margin: '4px 0 8px' }}>⚠ {downloadError}</div>
+              )}
 
               <div id="cv-print-area" className="cv-preview">
                 <div className="cv-name">{cv.name || 'Your Name'}</div>

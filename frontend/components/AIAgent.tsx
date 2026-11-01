@@ -15,7 +15,11 @@ const LOADING_MESSAGES = [
   'Generating your top matches...',
 ]
 
+const MAX_CV_BYTES = 5 * 1024 * 1024
+const CV_EXTENSIONS = ['pdf', 'docx', 'txt']
+
 const ROLE_LABELS: Record<string, string> = {
+  best_matches: 'Best matches for you',
   software_engineering: 'Software Engineering',
   devops: 'DevOps',
   analytics: 'Analytics',
@@ -83,6 +87,16 @@ export default function AIAgent() {
   }, [phase])
 
   const handleFileChange = (f: File) => {
+    const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
+    if (!CV_EXTENSIONS.includes(ext)) {
+      setError('Please upload a PDF, Word (.docx) or .txt file. Old .doc files: "Save as" .docx first.')
+      return
+    }
+    if (f.size > MAX_CV_BYTES) {
+      setError('This file is larger than 5 MB.')
+      return
+    }
+    setError('')
     setFile(f)
   }
 
@@ -174,14 +188,14 @@ export default function AIAgent() {
               >
                 <input
                   type="file"
-                  accept=".pdf,.doc,.docx"
+                  accept=".pdf,.docx,.txt"
                   onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileChange(f) }}
                 />
                 <div className="upload-icon">{file ? '✅' : '📄'}</div>
                 <div className="upload-title" style={{ color: file ? 'var(--accent3)' : undefined }}>
                   {file ? file.name : 'Drop your CV here'}
                 </div>
-                <div className="upload-sub">PDF or Word · up to 5MB</div>
+                <div className="upload-sub">PDF or Word (.docx) · up to 5MB</div>
               </div>
 
               <div className="or-divider">or paste links</div>
@@ -220,7 +234,7 @@ export default function AIAgent() {
               </div>
 
               <div className="input-group">
-                <div className="input-label">🎯 Target Roles (pick 1 or more)</div>
+                <div className="input-label">🎯 Target Roles (optional — leave empty to search all)</div>
                 <RoleSelector selected={roles} onChange={setRoles} />
               </div>
 
@@ -342,7 +356,12 @@ export default function AIAgent() {
                             <div className="match-rank">#{match.rank}</div>
 
                             <div className="match-top">
-                              <span className="match-score">{match.score}% match</span>
+                              <span
+                                className="match-score"
+                                title={`You have ${match.skills_matched.length} of ${match.skills_required} skills this job asks for`}
+                              >
+                                {match.score}% match
+                              </span>
                               <div className="match-title">{match.job.title}</div>
                             </div>
 
@@ -371,6 +390,16 @@ export default function AIAgent() {
                               >
                                 Generate CV →
                               </button>
+                              {match.job.url && (
+                                <a
+                                  className="btn-mini btn-mini-ghost"
+                                  href={match.job.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  View job ↗
+                                </a>
+                              )}
                               <button className="btn-mini btn-mini-ghost">
                                 {match.job.work_format} · {match.job.level}
                               </button>
