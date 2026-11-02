@@ -14,6 +14,7 @@ export interface Job {
   description?: string
   source: string
   url: string
+  posted_at?: string | null
 }
 
 export interface Match {

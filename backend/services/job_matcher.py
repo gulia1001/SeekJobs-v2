@@ -10,6 +10,8 @@ from services.data_loader import (
     get_market_salary,
     load_jobs,
     build_salary_label,
+    clean_url,
+    posted_at_iso,
 )
 
 log = logging.getLogger("seekjobs.matcher")
@@ -26,10 +28,6 @@ def _salary_status(expected: float | None, market_avg: float) -> str:
     if expected > market_avg * 1.1:
         return "above"
     return "at"
-
-
-def _clean_url(value) -> str:
-    return value.strip() if isinstance(value, str) and value.strip().startswith("http") else ""
 
 
 def _row_to_job(row: pd.Series) -> dict:
@@ -57,8 +55,9 @@ def _row_to_job(row: pd.Series) -> dict:
         "currency": str(row.get("currency_clean", "KZT")),
         "skills": list(row.get("skills_all_clean_list") or []),
         "source": str(row.get("source", "")),
-        "url": _clean_url(row.get("source_url")),
+        "url": clean_url(row.get("source_url")),
         "salary_display": build_salary_label(row),
+        "posted_at": posted_at_iso(row),
     }
 
 
@@ -66,6 +65,7 @@ async def match_jobs(
     user_skills: list[str],
     target_roles: list[str],
     preferred_salary: float | None = None,
+    user_level: str = "",
     top_n: int = 10,
 ) -> dict:
     """Returns {role: {market_avg_salary, currency, matches: [...]}} for each role.
@@ -96,6 +96,7 @@ async def match_jobs(
             user_skills,
             categories=[category] if category else None,
             salary_min=None,
+            user_level=user_level,
             top_n=top_n,
             df=df,
         )

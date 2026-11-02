@@ -1,10 +1,13 @@
-"""
-Loads and processes the same dataset used by the Streamlit dashboard.
-Primary source: analysis_ready_jobs_salary_fixed_v3.csv
-Fallback:  join jobs_entity_clean + jobs_salary_clean_v3 + jobs_skills_clean
+"""The job dataset used for matching and the job list.
 
-Files are produced by pipeline/run_pipeline.py. Set DATA_DIR to point
-somewhere else (e.g. /data inside Docker).
+Where jobs come from (first one with data wins):
+1. The jobs database — DATABASE_URL, or DATA_DIR/jobs.db (SQLite) if it exists.
+   Filled daily by pipeline/run_daily.py from Telegram channels. Only active jobs
+   posted in the last JOB_MAX_AGE_DAYS days are used; the same job posted in
+   several channels is shown once.
+2. The older batch CSV files in DATA_DIR/final (analysis_ready_jobs_salary_fixed_v3.csv).
+
+The dataset is reloaded every JOBS_RELOAD_SECONDS, so new jobs appear without a restart.
 """
 from __future__ import annotations
 
@@ -13,19 +16,26 @@ import json
 import logging
 import os
 import re
-from functools import lru_cache
+import threading
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-from services.skills import base_key, keyed, score_job, skill_key
+from services.skills import (
+    COMMON_SKILLS, NON_TECHNICAL, find_skills, keyed, level_fit, score_job, skill_key,
+)
 
 log = logging.getLogger("seekjobs.loader")
 
-# ── paths ──────────────────────────────────────────────────────────────────
+# ── settings ───────────────────────────────────────────────────────────────
 _BACKEND  = Path(__file__).resolve().parents[1]
 DATA_DIR = Path(os.getenv("DATA_DIR") or (_BACKEND.parent / "pipeline" / "data"))
+DATABASE_URL = os.getenv("DATABASE_URL") or ""
+JOB_MAX_AGE_DAYS = int(os.getenv("JOB_MAX_AGE_DAYS") or 45)
+RELOAD_SECONDS = int(os.getenv("JOBS_RELOAD_SECONDS") or 600)
 
 FINAL   = DATA_DIR / "final"
 INTERIM = DATA_DIR / "interim"
@@ -103,16 +113,59 @@ def build_salary_label(row: pd.Series) -> str:
     return "Salary not listed"
 
 
+def clean_url(value) -> str:
+    """Job link, or "" for missing/invalid values (pandas NaN must not become "nan")."""
+    return value.strip() if isinstance(value, str) and value.strip().startswith("http") else ""
+
+
+def posted_at_iso(row: pd.Series) -> str | None:
+    """'2026-11-02T09:12:55Z' or None (CSV datasets have no post date)."""
+    value = row.get("posted_at")
+    if value is None or pd.isna(value):
+        return None
+    return pd.Timestamp(value).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 # ── load & prepare ──────────────────────────────────────────────────────────
-@lru_cache(maxsize=1)
+# current dataset + things derived from it (vocabulary, demand ranking)
+_state: dict[str, Any] = {"df": None, "loaded_at": 0.0, "vocab": None, "demand": None}
+_lock = threading.Lock()
+
+
 def load_jobs() -> pd.DataFrame:
-    df = _load_raw()
-    if not df.empty:
-        df["match_skills"] = df.apply(_match_skills, axis=1, result_type="reduce")
-    return df
+    """Current job dataset; reloaded from the source every RELOAD_SECONDS."""
+    if _state["df"] is not None and time.monotonic() - _state["loaded_at"] < RELOAD_SECONDS:
+        return _state["df"]
+    with _lock:
+        if _state["df"] is not None and time.monotonic() - _state["loaded_at"] < RELOAD_SECONDS:
+            return _state["df"]
+        try:
+            df = _load_raw()
+        except Exception:
+            log.exception("Loading jobs failed")
+            if _state["df"] is None:
+                raise
+            df = _state["df"]  # keep serving the previous dataset
+        if not df.empty and "match_skills" not in df.columns:
+            df["match_skills"] = df.apply(_match_skills, axis=1, result_type="reduce")
+        _state.update(df=df, loaded_at=time.monotonic(), vocab=None, demand=None)
+        return df
+
+
+def database_url() -> str | None:
+    if DATABASE_URL:
+        return DATABASE_URL
+    sqlite_file = DATA_DIR / "jobs.db"
+    return f"sqlite:///{sqlite_file.as_posix()}" if sqlite_file.exists() else None
 
 
 def _load_raw() -> pd.DataFrame:
+    url = database_url()
+    if url:
+        df = _load_db(url)
+        if not df.empty:
+            return df
+        log.warning("Jobs database has no fresh active jobs — trying CSV files")
     if MAIN_CSV.exists():
         log.info("Loading main CSV: %s", MAIN_CSV)
         return _load_main()
@@ -130,7 +183,59 @@ def _match_skills(row: pd.Series) -> dict[str, str]:
     """Skills used for scoring: hard skills + tech stack (soft skills like
     'communication' are left out — CVs rarely list them, so they'd only lower scores)."""
     hard = safe_parse_list(row.get("hard_skills_clean")) + safe_parse_list(row.get("tech_stack_clean"))
-    return keyed(hard or row.get("skills_all_clean_list") or [])
+    skills = keyed(hard or row.get("skills_all_clean_list") or [])
+    return {k: v for k, v in skills.items() if k not in NON_TECHNICAL}
+
+
+_engines: dict[str, Any] = {}
+
+# jobs table column (written by pipeline/db.py) -> column name used in this module
+_DB_COLUMNS = {
+    "title": "title_final", "company": "company_clean", "city": "city_norm",
+    "category": "category_filled", "level": "level_filled", "work_format": "work_format_norm",
+    "salary_from": "salary_from_clean", "salary_to": "salary_to_clean",
+    "salary_avg": "salary_avg_clean", "currency": "currency_clean",
+    "skills": "hard_skills_clean", "description": "description_clean_v2",
+}
+
+
+def _load_db(url: str) -> pd.DataFrame:
+    """Active jobs posted in the last JOB_MAX_AGE_DAYS days, newest first, one per dedup_key."""
+    from sqlalchemy import MetaData, Table, create_engine, inspect, select
+
+    engine = _engines.get(url)
+    if engine is None:
+        engine = _engines[url] = create_engine(url, pool_pre_ping=True)
+    if not inspect(engine).has_table("jobs"):
+        log.warning("No 'jobs' table in %s — run pipeline/run_daily.py", url.split("@")[-1])
+        return pd.DataFrame()
+
+    jobs = Table("jobs", MetaData(), autoload_with=engine)
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=JOB_MAX_AGE_DAYS)
+    query = (
+        select(jobs)
+        .where(jobs.c.is_active == True, jobs.c.posted_at >= cutoff)  # noqa: E712
+        .order_by(jobs.c.posted_at.desc())
+    )
+    with engine.connect() as conn:
+        df = pd.DataFrame(conn.execute(query).mappings().all())
+    if df.empty:
+        return df
+
+    df = df.rename(columns=_DB_COLUMNS)
+    df = df.drop_duplicates("dedup_key", keep="first")  # same job in several channels
+    df["skills_all_clean_list"] = df["hard_skills_clean"].apply(safe_parse_list)
+    for col in ["salary_from_clean", "salary_to_clean", "salary_avg_clean"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    for col in ["title_final", "company_clean", "city_norm", "category_filled", "level_filled",
+                "work_format_norm", "currency_clean", "source", "description_clean_v2"]:
+        df[col] = df[col].fillna("").astype(str).str.strip()
+    df["currency_clean"] = df["currency_clean"].replace("", "KZT")
+    df["dedup_keep_for_analytics"] = True
+    df["usable_for_salary_analytics"] = df["salary_avg_clean"].notna() & (df["currency_clean"] == "KZT")
+    df = df[df["title_final"] != ""]
+    log.info("Loaded %d fresh jobs from database (last %d days)", len(df), JOB_MAX_AGE_DAYS)
+    return df.reset_index(drop=True)
 
 
 def _load_main() -> pd.DataFrame:
@@ -220,31 +325,36 @@ def _load_enriched() -> pd.DataFrame:
 
 
 # ── skills vocabulary ───────────────────────────────────────────────────────
-@lru_cache(maxsize=1)
-def get_known_skills(df_hash: int = 0) -> list[str]:
+def get_known_skills() -> list[str]:
     """All skills from the dataset, most frequent first."""
     from collections import Counter
     df = load_jobs()
-    if df.empty:
-        return []
+    if _state["vocab"] is not None and _state["df"] is df:
+        return _state["vocab"]
     counter: Counter[str] = Counter()
-    for lst in df["skills_all_clean_list"]:
-        counter.update(lst)
+    if not df.empty:
+        for lst in df["skills_all_clean_list"]:
+            counter.update(lst)
     skills = [s for s, _ in counter.most_common()]
     log.info("Skills vocabulary: %d unique terms", len(skills))
+    _state["vocab"] = skills
     return skills
 
 
 def get_vocab() -> list[str]:
-    return get_known_skills()
+    """Dataset skills (most frequent first) plus the built-in list of common IT skills."""
+    return get_known_skills() + COMMON_SKILLS
 
 
-@lru_cache(maxsize=1)
 def _demand_rank() -> dict[str, int]:
     """skill key -> position in the market-frequency list (0 = most demanded)."""
+    df = load_jobs()
+    if _state["demand"] is not None and _state["df"] is df:
+        return _state["demand"]
     rank: dict[str, int] = {}
     for i, s in enumerate(get_known_skills()):
         rank.setdefault(skill_key(s), i)
+    _state["demand"] = rank
     return rank
 
 
@@ -255,6 +365,7 @@ def find_matching_vacancies(
     categories: list[str] | None = None,
     level: str = "",
     salary_min: float | None = None,
+    user_level: str = "",
     top_n: int = 5,
     df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
@@ -289,7 +400,8 @@ def find_matching_vacancies(
 
     filtered = filtered.copy()
     filtered["match_score"] = [s[0] for s in scores]
-    filtered["_rank_score"] = [s[1] for s in scores]
+    # a junior sees senior/lead roles lower in the list (score shown to the user is unchanged)
+    filtered["_rank_score"] = [s[1] * level_fit(user_level, lvl) for s, lvl in zip(scores, filtered["level_filled"])]
     filtered["matched_skills"] = [s[2] for s in scores]
     filtered["missing_skills"] = [
         sorted(s[3], key=lambda name: demand.get(skill_key(name), len(demand)))[:8] for s in scores
@@ -328,75 +440,54 @@ def get_market_salary(category: str, df: pd.DataFrame | None = None) -> dict:
 
 
 # ── CV text analysis ────────────────────────────────────────────────────────
-# 1–2 letter words that are real skills (others like "a", "в" are ignored)
-_SHORT_ALLOW = {"ai", "bi", "ci", "ml", "nlp", "qa", "ui", "ux", "js",
-                "go", "c#", "c++", "1c", "1с", "hr", "r"}
-_WORD = re.compile(r"[\w#+.]+")
-_MAX_PHRASE_WORDS = 4
-
-
 def extract_skills_from_text(
     text: str,
     known_skills: list[str] | None = None,
     max_skills: int = 40,
 ) -> list[str]:
-    """Find known skills in free text (CV, repo summary), in order of appearance.
+    """Known skills in free text (CV, repo summary) — see skills.find_skills."""
+    return find_skills(text, get_vocab() if known_skills is None else known_skills, max_skills)
 
-    Every 1–4 word phrase in the text is normalized with skill_key(), so
-    'Postgres', 'CI/CD', 'scikit-learn' or 'Node.js' match the dataset's
-    'PostgreSQL', 'CI/CD', 'scikit-learn', 'NodeJS'.
-    """
-    if not text.strip():
-        return []
-    if known_skills is None:
-        known_skills = get_vocab()
-    vocab: dict[str, str] = {}
-    for s in known_skills:
-        vocab.setdefault(skill_key(s), s)
-    vocab.pop("", None)
 
-    words = [w.strip(".") for w in _WORD.findall(text)]
-    words = [w for w in words if w]
-    found: list[str] = []
-    seen: set[str] = set()
-    for i in range(len(words)):
-        for n in range(_MAX_PHRASE_WORDS, 0, -1):  # longest phrase first: "Spring Boot" before "Spring"
-            if i + n > len(words):
-                continue
-            phrase = " ".join(words[i:i + n])
-            raw = base_key(phrase)
-            if len(raw) <= 2 and raw not in _SHORT_ALLOW:
-                continue
-            key = skill_key(phrase)
-            if key in vocab and key not in seen:
-                seen.add(key)
-                found.append(vocab[key])
-                if len(found) >= max_skills:
-                    return found
-    return found
+_CV_LEVELS = [
+    ("intern", r"intern\w*|trainee|стаж[её]р\w*|стажировк\w*"),
+    ("junior", r"junior|джуниор\w*|младш\w*"),
+    ("middle", r"middle|mid-level"),
+    ("senior", r"senior|сеньор\w*|старш\w*"),
+    ("lead", r"team ?lead|tech ?lead|тимлид\w*|техлид\w*|head of|lead (?:developer|engineer)"),
+]
+_CV_LEVEL_RE = [(lvl, re.compile(rf"(?i)(?<![\w-])(?:{p})(?![\w-])")) for lvl, p in _CV_LEVELS]
+
+
+def detect_cv_level(text: str, years: int | None) -> str:
+    """The level the CV mentions first (usually its headline), else from years of
+    experience, else '' (unknown) — never a guess."""
+    best: tuple[int, str] | None = None
+    for level, rx in _CV_LEVEL_RE:
+        m = rx.search(text)
+        if m and (best is None or m.start() < best[0]):
+            best = (m.start(), level)
+    if best:
+        return best[1]
+    if years is None:
+        return ""
+    return "senior" if years >= 5 else "middle" if years >= 3 else "junior"
 
 
 def summarize_cv_text(text: str, known_skills: list[str] | None = None) -> dict:
-    """Exact port of app/data/loader.py::summarize_resume_text."""
+    """Skills, years of experience, level and English level found in CV text."""
     clean = text.strip()
     skills = extract_skills_from_text(clean, known_skills)
 
     years = None
-    m = re.search(r"(\d+)\+?\s*(?:years?|лет|года|год)", clean, re.IGNORECASE)
+    m = re.search(r"(?<!\d)(\d{1,2})\+?\s*(?:years?|лет|года|год)(?!\w)", clean, re.IGNORECASE)
     if m:
         years = int(m.group(1))
-
-    level = "junior"
-    low = clean.casefold()
-    if any(w in low for w in ["lead", "head", "руковод", "team lead"]):   level = "lead"
-    elif any(w in low for w in ["senior", "старш", "sr."]):               level = "senior"
-    elif any(w in low for w in ["middle", "mid-level", "mid "]):          level = "middle"
-    elif any(w in low for w in ["intern", "стаж", "trainee"]):            level = "intern"
 
     eng = None
     em = re.search(r"\b(a1|a2|b1|b2|c1|c2)\b", clean, re.IGNORECASE)
     if em:
         eng = em.group(1).upper()
 
-    return {"skills": skills, "years_experience": years, "level": level,
+    return {"skills": skills, "years_experience": years, "level": detect_cv_level(clean, years),
             "english_level": eng, "preview": clean[:400]}

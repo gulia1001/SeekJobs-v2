@@ -1,6 +1,7 @@
 'use client'
 import { useState } from 'react'
 import type { Job } from '@/lib/types'
+import { postedAgo } from '@/lib/time'
 
 function formatSalary(job: Job): string {
   if (!job.salary_from && !job.salary_to) return 'Salary not listed'
@@ -32,7 +33,10 @@ export default function JobCard({ job }: { job: Job }) {
       </div>
 
       <div className="job-title">{job.title}</div>
-      <div className="job-company">{job.company} · {job.city}</div>
+      <div className="job-company">
+        {[job.company, job.city, postedAgo(job.posted_at) && `posted ${postedAgo(job.posted_at)}`]
+          .filter(Boolean).join(' · ')}
+      </div>
 
       {job.description && (
         <div className="job-description">{job.description}</div>

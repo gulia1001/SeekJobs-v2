@@ -180,10 +180,15 @@ def _fallback_cv(job_title: str, job_skills: list[str], user_profile: dict, gith
             f"Seeking {job_title} position."
         ),
         "experience": [],
-        "projects": [],
+        # real data only: the candidate's own GitHub repos and LinkedIn certificates
+        "projects": [
+            {"name": r.get("name", ""), "description": r.get("description", ""),
+             "tech": ", ".join(r.get("stack") or [])}
+            for r in (user_profile.get("top_repos") or [])[:3]
+        ],
         "education": [],
         "skills": skills,
-        "certificates": [],
+        "certificates": [c.get("name", "") for c in (user_profile.get("certifications") or []) if c.get("name")],
         "tailored_note": f"This CV highlights skills most relevant to the {job_title} role.",
     }
     

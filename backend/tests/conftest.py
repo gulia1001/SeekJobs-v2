@@ -4,7 +4,7 @@ from pathlib import Path
 # Must be set before the app (and services.data_loader) is imported.
 os.environ["DATA_DIR"] = str(Path(__file__).parent / "fixtures" / "data")
 os.environ["GROQ_API_KEY"] = ""  # never call the real LLM from tests
-os.environ["APIFY_TOKEN"] = ""
+os.environ["DATABASE_URL"] = ""  # use the CSV fixture, never a developer's real jobs database
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

@@ -1,77 +1,96 @@
 # SeekJobs
 
-AI career assistant for IT job seekers in Kazakhstan. Upload a CV (and optionally
-GitHub / LinkedIn), see matching local vacancies with your skill gaps and market
-salary, and get a CV tailored to a specific job.
+Career assistant for IT job seekers in Kazakhstan. Upload a CV (and optionally a
+LinkedIn profile PDF and your GitHub), see fresh matching vacancies with your skill
+gaps and market salary, and download a CV tailored to a specific job (PDF / Word).
 
-Powered by a cleaned dataset of ~15k Kazakhstan IT vacancies (hh.kz, Kolesa,
-Kaspi, Telegram channels).
+Jobs are collected every day from public Telegram IT channels (devkz_jobs, itvacancykz,
+workitkz, itcom_kz, zhumysbarit, halyk_jumys, insferaforyou — list in
+`pipeline/scrapers/telegram_channels.txt`).
 
 ## Structure
 
 ```text
 SeekJobs-v2/
 ├── frontend/           Next.js 14 — landing page + app
-├── backend/            FastAPI — profile analysis, job matching, CV generation
-├── pipeline/           job data: scrape → clean → LLM enrich → final dataset (see pipeline/README.md)
-├── docker-compose.yml  runs backend + frontend
-└── .env.example        API keys and settings
+├── backend/            FastAPI — profile analysis, job matching, CV generation & export
+├── pipeline/           daily job collector (Telegram → rules → database) + older batch flow
+├── docker-compose.yml  Postgres + collector + backend + frontend
+└── .env.example        settings (all optional)
 ```
 
-## Quick start
+## Run it now — no LLM / API key needed
 
-1. **Get the job data.** It is not in git. Put the files in `pipeline/data/`
-   (`final/analysis_ready_jobs_salary_fixed_v3.csv` is the one the backend needs),
-   or rebuild them with `pipeline/run_pipeline.py`. Without data the app runs but shows no jobs.
-2. **Set keys:** `cp .env.example .env` and fill in `GROQ_API_KEY` (others optional).
-3. **Run** — either with Docker:
-
-   ```bash
-   docker compose up --build
-   ```
-
-   or by hand (two terminals):
-
-   ```bash
-   cd backend && pip install -r requirements.txt && uvicorn main:app --reload --port 8001
-   cd frontend && npm install && npm run dev
-   ```
-
-Open http://localhost:3001. API health check: http://localhost:8001/api/health
-
-## Tests
+Needs **Python 3.10+** and **Node.js 20+**. Three terminals, from the project folder:
 
 ```bash
-cd backend && pip install -r requirements.txt -r requirements-dev.txt && pytest -q
+# 1. collect jobs (≈1 minute, creates pipeline/data/jobs.db)
+cd pipeline
+pip install -r requirements.txt
+python run_daily.py
+
+# 2. backend — finds pipeline/data/jobs.db by itself
+cd backend
+pip install -r requirements.txt
+uvicorn main:app --port 8001
+
+# 3. frontend
+cd frontend
+npm install
+npm run dev
 ```
 
-Tests use a small fake dataset in `backend/tests/fixtures/` (no real data or API keys
-needed). GitHub Actions (`.github/workflows/ci.yml`) runs backend tests, the frontend
-production build and pipeline checks on every push and pull request.
+Open http://localhost:3001. Re-run `python run_daily.py` once a day for fresh jobs
+(or schedule it — see `pipeline/README.md`); the backend picks up new jobs within 10 minutes.
+
+**What works without an LLM key:** CV / LinkedIn PDF / GitHub analysis, skill detection,
+job matching with skill gaps, market salary, job links, CV download as PDF / Word with your
+real skills, contacts, GitHub projects and certificates.
+**What the key adds** (`GROQ_API_KEY` in `.env`, free tier at console.groq.com): the CV text is
+rewritten for each job (summary, experience bullets), and each match gets a one-line explanation.
+
+### Or with Docker
+
+```bash
+docker compose up --build
+```
+
+Starts Postgres, the collector (runs at start and then every 24 h), backend and frontend.
 
 ## How matching works
 
 - Skill names are normalized, so `Postgres` = `PostgreSQL`, `React.js` = `React`,
-  `1С` = `1C`, `CI/CD` = `CI CD` (`backend/services/skills.py`).
-- Score = share of the **job's** skills you have (hard skills + tech stack; soft skills
-  are ignored). Having many other skills never lowers your score.
-- Ranking slightly prefers jobs with more evidence (5 of 5 skills beats 1 of 1).
-- Missing skills are listed most-in-demand first.
-- No role selected → searches all categories ("Best matches for you").
+  `1С` = `1C`, `#cpp` = `C++` (`backend/services/skills.py`).
+- Score = share of the **job's** skills you have (soft skills and spoken languages are not
+  counted). Having many other skills never lowers your score.
+- Ranking prefers jobs that list enough skills to judge (4 of 4 beats 1 of 1) and jobs at
+  your level (a junior sees senior roles lower).
+- Missing skills are listed most-in-demand first. No role selected → all categories.
+- Only jobs posted in the last 45 days are shown; a job reposted in several channels is shown once.
+
+## Tests
+
+```bash
+cd backend  && pip install -r requirements.txt -r requirements-dev.txt && pytest -q
+cd pipeline && pip install -r requirements.txt -r requirements-dev.txt && pytest -q
+```
+
+No network, real data or API keys needed. GitHub Actions (`.github/workflows/ci.yml`) runs
+both suites (pipeline also on Postgres) and the frontend production build on every push / PR.
 
 ## API
 
 | Method | Path | What it does |
 |---|---|---|
-| GET | `/api/jobs` | Paginated vacancies (`page`, `limit`, `category`, `level`, `format`) |
-| POST | `/api/analyze` | Form: `cv_file` (PDF/DOCX/TXT, ≤5 MB), `github_url`, `linkedin_url`, `preferred_salary`, `target_roles[]` (optional) → skills + top matches per role |
+| GET | `/api/jobs` | Fresh vacancies, newest first (`page`, `limit`, `category`, `level`, `format`) |
+| POST | `/api/analyze` | Form: `cv_file` (PDF/DOCX/TXT ≤5 MB), `linkedin_pdf` (LinkedIn "Save to PDF"), `github_url`, `preferred_salary`, `target_roles[]` → skills + top matches |
 | POST | `/api/cv/generate` | Tailored CV (JSON + LaTeX) for one job — uses only facts from the CV/profile |
 | POST | `/api/cv/export` | `{cv, format: "pdf" \| "docx"}` → downloadable file (real text, Cyrillic supported) |
 
 ## Roadmap
 
 - **Phase 0 — cleanup** ✅ structure, secrets out of git, CV-only crash fixed, tailored CV uses real CV text
-- **Phase 1 — MVP works end to end** ✅ new matching score + skill synonyms, no-role search, PDF/Word export, job links, upload limits, CORS config, tests + CI
-- **Phase 2 — data engine:** daily fresh jobs in Postgres, legal data sources, LinkedIn PDF import instead of scraping
+- **Phase 1 — MVP works end to end** ✅ matching score + skill synonyms, no-role search, PDF/Word export, job links, upload limits, CORS, tests + CI
+- **Phase 2 — data engine** ✅ daily Telegram collector (no LLM), jobs database (SQLite/Postgres), freshness + repost merging, level-aware ranking, LinkedIn PDF import instead of scraping
 - **Phase 3 — product:** accounts, application tracker, RU/KZ/EN, Telegram bot
 - **Phase 4–5 — validate & monetize:** pilots with universities/bootcamps, freemium + B2B licences

@@ -1,0 +1,12 @@
+# Public Telegram channels to collect vacancies from — one per line.
+# Format:   channel_name                  (from https://t.me/channel_name)
+#           channel_name | Company Name   (if every post in the channel is from one employer)
+# Lines starting with # are ignored. Only PUBLIC channels work (https://t.me/s/<name> must open).
+
+devkz_jobs
+itvacancykz
+itcom_kz
+workitkz
+zhumysbarit
+halyk_jumys | Halyk Bank
+insferaforyou

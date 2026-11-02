@@ -1,17 +1,50 @@
-# Run the whole app:  docker compose up --build
+# Run everything:  docker compose up --build
 # Then open http://localhost:3001  (API: http://localhost:8001/api/health)
+#
+#   db         Postgres with the jobs table
+#   collector  collects vacancies from Telegram channels at start and then once a day
+#   backend    FastAPI (matching, CV generation)
+#   frontend   Next.js
+x-database-url: &database-url postgresql+psycopg://seekjobs:${POSTGRES_PASSWORD:-seekjobs-local}@db:5432/seekjobs
+
 services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: seekjobs
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-seekjobs-local}  # set a real password in .env for servers
+      POSTGRES_DB: seekjobs
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seekjobs"]
+      interval: 5s
+      retries: 10
+
+  collector:
+    build: ./pipeline
+    environment:
+      DATABASE_URL: *database-url
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
   backend:
     build: ./backend
     env_file:
       - path: .env
         required: false
     environment:
+      DATABASE_URL: *database-url
       DATA_DIR: /data
     volumes:
-      - ./pipeline/data:/data:ro   # job dataset produced by pipeline/run_pipeline.py
+      - ./pipeline/data:/data:ro   # optional older CSV dataset (used only if the database is empty)
     ports:
       - "8001:8001"
+    depends_on:
+      db:
+        condition: service_healthy
 
   frontend:
     build:
@@ -22,3 +55,6 @@ services:
       - "3001:3001"
     depends_on:
       - backend
+
+volumes:
+  db-data:

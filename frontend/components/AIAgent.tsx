@@ -2,13 +2,14 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AnalysisResult, GeneratedCV, Match } from '@/lib/types'
 import { analyzeProfile, generateCV } from '@/lib/api'
+import { postedAgo } from '@/lib/time'
 import RoleSelector from './RoleSelector'
 import CVModal from './CVModal'
 
 const LOADING_MESSAGES = [
   'Parsing your CV...',
   'Analyzing GitHub repositories...',
-  'Scanning LinkedIn profile...',
+  'Reading LinkedIn profile...',
   'Matching against KZ IT vacancies...',
   'Scoring skill overlap per role...',
   'Comparing salary expectations...',
@@ -55,7 +56,7 @@ export default function AIAgent() {
   const sectionRef = useRef<HTMLDivElement>(null)
   const [file, setFile] = useState<File | null>(null)
   const [dragOver, setDragOver] = useState(false)
-  const [linkedinUrl, setLinkedinUrl] = useState('')
+  const [linkedinFile, setLinkedinFile] = useState<File | null>(null)
   const [githubUrl, setGithubUrl] = useState('')
   const [preferredSalary, setPreferredSalary] = useState('')
   const [roles, setRoles] = useState<string[]>([])
@@ -101,8 +102,8 @@ export default function AIAgent() {
   }
 
   const runAnalysis = async () => {
-    if (!file && !linkedinUrl && !githubUrl) {
-      setError('Please upload a CV or provide a LinkedIn or GitHub URL.')
+    if (!file && !linkedinFile && !githubUrl) {
+      setError('Please upload a CV or LinkedIn PDF, or add your GitHub link.')
       return
     }
     setError('')
@@ -111,7 +112,7 @@ export default function AIAgent() {
 
     const formData = new FormData()
     if (file) formData.append('cv_file', file)
-    if (linkedinUrl) formData.append('linkedin_url', linkedinUrl)
+    if (linkedinFile) formData.append('linkedin_pdf', linkedinFile)
     if (githubUrl) formData.append('github_url', githubUrl)
     if (preferredSalary) formData.append('preferred_salary', preferredSalary)
     roles.forEach((r) => formData.append('target_roles', r))
@@ -198,17 +199,26 @@ export default function AIAgent() {
                 <div className="upload-sub">PDF or Word (.docx) · up to 5MB</div>
               </div>
 
-              <div className="or-divider">or paste links</div>
+              <div className="or-divider">and / or</div>
 
               <div className="input-group">
-                <div className="input-label">🔗 LinkedIn URL</div>
+                <div className="input-label">🔗 LinkedIn profile PDF (optional)</div>
                 <input
                   className="ai-input"
-                  type="url"
-                  placeholder="https://linkedin.com/in/yourname"
-                  value={linkedinUrl}
-                  onChange={(e) => setLinkedinUrl(e.target.value)}
+                  type="file"
+                  accept=".pdf"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    if (!f) return
+                    if (!f.name.toLowerCase().endsWith('.pdf')) { setError('The LinkedIn profile must be a PDF.'); return }
+                    if (f.size > MAX_CV_BYTES) { setError('This file is larger than 5 MB.'); return }
+                    setError('')
+                    setLinkedinFile(f)
+                  }}
                 />
+                <div className="upload-sub" style={{ marginTop: 4 }}>
+                  On LinkedIn open your profile → “More” → “Save to PDF”, then upload that file.
+                </div>
               </div>
 
               <div className="input-group">
@@ -368,6 +378,7 @@ export default function AIAgent() {
                             <div className="match-company">
                               {match.job.company} · {match.job.city} ·{' '}
                               {formatSalaryKZT(match.job.salary_avg ?? match.job.salary_from, match.job.currency)}
+                              {postedAgo(match.job.posted_at) && <> · posted {postedAgo(match.job.posted_at)}</>}
                             </div>
 
                             <div className="match-reason">{match.reason}</div>

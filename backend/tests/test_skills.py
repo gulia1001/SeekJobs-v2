@@ -82,3 +82,35 @@ def test_parse_salary(raw, expected):
 def test_guess_name(text, expected):
     from services.cv_generator import _guess_name
     assert _guess_name(text) == expected
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Junior Backend-разработчик\nОпыт: стажировка в DemoTech", "junior"),  # headline wins over the internship
+    ("Senior Python Developer, 6 years", "senior"),
+    ("Python developer, 5 лет опыта", "senior"),  # no level word -> years
+    ("Python developer, 2 года опыта", "junior"),
+    ("Strong leadership, always ahead of deadlines", ""),  # no false "lead"
+    ("Python developer since 2025 год", ""),  # a year is not years of experience
+    ("", ""),
+])
+def test_cv_level(text, expected):
+    from services.data_loader import summarize_cv_text
+    assert summarize_cv_text(text, ["Python"])["level"] == expected
+
+
+def test_level_fit():
+    from services.skills import level_fit
+    assert level_fit("junior", "senior") == 0.5
+    assert level_fit("junior", "middle") == 0.85
+    assert level_fit("junior", "junior") == level_fit("", "senior") == level_fit("junior", "unknown") == 1.0
+
+
+def test_spoken_languages_do_not_count_as_match_skills():
+    import pandas as pd
+    from services.data_loader import _match_skills
+    assert list(_match_skills(pd.Series({"hard_skills_clean": '["English", "Python", "Казахский язык"]'}))) == ["python"]
+
+
+def test_english_level_is_detected():
+    from services.data_loader import summarize_cv_text
+    assert summarize_cv_text("Junior developer. English B2, Russian C2.", ["Python"])["english_level"] == "B2"

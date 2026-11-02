@@ -1,0 +1,9 @@
+data
+.llm_checkpoints
+__pycache__
+*.pyc
+tests
+docs
+dashboard
+scrapers/*.ipynb
+Dockerfile

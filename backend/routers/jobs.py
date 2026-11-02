@@ -1,7 +1,7 @@
 import logging
 import pandas as pd
 from fastapi import APIRouter, Query
-from services.data_loader import load_jobs, build_salary_label
+from services.data_loader import build_salary_label, clean_url, load_jobs, posted_at_iso
 
 router = APIRouter()
 log = logging.getLogger("seekjobs.jobs")
@@ -30,8 +30,9 @@ def _row_to_dict(row: pd.Series) -> dict:
         "skills": list(row.get("skills_all_clean_list") or []),
         "source": str(row.get("source", "")),
         "description": str(row.get("description_clean_v2") or row.get("description") or row.get("requirements_clean") or ""),
-        "url": str(row.get("source_url", "")),
+        "url": clean_url(row.get("source_url")),
         "salary_display": build_salary_label(row),
+        "posted_at": posted_at_iso(row),
     }
 
 
