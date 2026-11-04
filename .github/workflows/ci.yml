@@ -74,3 +74,20 @@ jobs:
       - run: python -m compileall -q .
       - run: python -c "import enrich.pipeline, enrich.main"
       - run: python enrich/test_telegram_cascade.py
+
+  airflow:
+    name: Airflow DAG checks
+    runs-on: ubuntu-latest
+    env:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Airflow 3.3.2 + collector libraries (same versions as the Docker image)
+        run: >-
+          pip install "apache-airflow==3.3.2" -r pipeline/requirements.txt pytest
+          --constraint https://raw.githubusercontent.com/apache/airflow/constraints-3.3.2/constraints-3.12.txt
+      - run: airflow db migrate
+      - run: pytest -q airflow/tests

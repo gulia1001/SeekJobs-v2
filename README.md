@@ -4,9 +4,9 @@ Career assistant for IT job seekers in Kazakhstan. Upload a CV (and optionally a
 LinkedIn profile PDF and your GitHub), see fresh matching vacancies with your skill
 gaps and market salary, and download a CV tailored to a specific job (PDF / Word).
 
-Jobs are collected every day from public Telegram IT channels (devkz_jobs, itvacancykz,
-workitkz, itcom_kz, zhumysbarit, halyk_jumys, insferaforyou — list in
-`pipeline/scrapers/telegram_channels.txt`).
+Jobs are collected once a day by an **Airflow ETL** from public Telegram IT channels
+(devkz_jobs, itvacancykz, workitkz, itcom_kz, zhumysbarit, halyk_jumys, insferaforyou — list in
+`pipeline/scrapers/telegram_channels.txt`). How it all fits together: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Structure
 
@@ -14,8 +14,11 @@ workitkz, itcom_kz, zhumysbarit, halyk_jumys, insferaforyou — list in
 SeekJobs-v2/
 ├── frontend/           Next.js 14 — landing page + app
 ├── backend/            FastAPI — profile analysis, job matching, CV generation & export
-├── pipeline/           daily job collector (Telegram → rules → database) + older batch flow
-├── docker-compose.yml  Postgres + collector + backend + frontend
+├── pipeline/           ETL code: Telegram → rules → database (etl.py, run_daily.py) + older batch flow
+├── airflow/            Airflow DAG that runs the ETL daily (dags/seekjobs_daily.py) + its image
+├── docs/               ARCHITECTURE.md — diagrams of the system, the ETL and the user flow
+├── infra/              Postgres init script
+├── docker-compose.yml  Postgres + Airflow + backend + frontend
 └── .env.example        settings (all optional)
 ```
 
@@ -49,13 +52,24 @@ real skills, contacts, GitHub projects and certificates.
 **What the key adds** (`GROQ_API_KEY` in `.env`, free tier at console.groq.com): the CV text is
 rewritten for each job (summary, experience bullets), and each match gets a one-line explanation.
 
-### Or with Docker
+### Or with Docker — everything incl. the daily Airflow ETL
 
 ```bash
-docker compose up --build
+docker compose up --build -d
 ```
 
-Starts Postgres, the collector (runs at start and then every 24 h), backend and frontend.
+| What | Where |
+|---|---|
+| Website | http://localhost:3001 |
+| API | http://localhost:8001/api/health |
+| Airflow (ETL) | http://localhost:8088 — login `admin` / `admin` (set `AIRFLOW_ADMIN_PASSWORD` in `.env`) |
+
+Airflow runs the DAG `seekjobs_daily_vacancies` **every day at 08:00 Almaty time** — and once right
+after the first start. In the Airflow UI you can see each channel's task, its logs, and press ▶ to run
+it now. Needs ~3 GB RAM for Docker. Without Airflow: `docker compose up -d db backend frontend`.
+
+> **OneDrive:** Docker cannot build from a folder synced by OneDrive (`archive/tar: unknown file mode`).
+> Keep the project outside OneDrive, e.g. `C:\dev\SeekJobs-v2`, before `docker compose up --build`.
 
 ## How matching works
 
@@ -91,6 +105,6 @@ both suites (pipeline also on Postgres) and the frontend production build on eve
 
 - **Phase 0 — cleanup** ✅ structure, secrets out of git, CV-only crash fixed, tailored CV uses real CV text
 - **Phase 1 — MVP works end to end** ✅ matching score + skill synonyms, no-role search, PDF/Word export, job links, upload limits, CORS, tests + CI
-- **Phase 2 — data engine** ✅ daily Telegram collector (no LLM), jobs database (SQLite/Postgres), freshness + repost merging, level-aware ranking, LinkedIn PDF import instead of scraping
+- **Phase 2 — data engine** ✅ daily Telegram collector (no LLM), jobs database (SQLite/Postgres), freshness + repost merging, level-aware ranking, LinkedIn PDF import instead of scraping; Airflow DAG runs the ETL daily (edits / closed / deleted posts detected, data quality checks, alerts)
 - **Phase 3 — product:** accounts, application tracker, RU/KZ/EN, Telegram bot
 - **Phase 4–5 — validate & monetize:** pilots with universities/bootcamps, freemium + B2B licences

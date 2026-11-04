@@ -24,6 +24,10 @@ USER_AGENT = "SeekJobsBot/0.2 (+https://github.com/gulia1001/SeekJobs-v2)"
 REQUEST_DELAY_SECONDS = 1.5
 
 
+class ChannelFetchError(RuntimeError):
+    pass
+
+
 @dataclass
 class Channel:
     handle: str
@@ -96,8 +100,12 @@ def fetch_channel(
     max_pages: int = 50,
     session: requests.Session | None = None,
     delay: float = REQUEST_DELAY_SECONDS,
+    raise_errors: bool = False,
 ) -> list[Post]:
-    """Posts newer than `after_id` and posted on/after `since` (UTC), oldest first."""
+    """Posts newer than `after_id` and posted on/after `since` (UTC), oldest first.
+
+    raise_errors=True (used by Airflow) raises ChannelFetchError instead of returning
+    what was collected so far, so the task fails and is retried."""
     session = session or _session()
     found: dict[int, Post] = {}
     before: int | None = None
@@ -106,10 +114,14 @@ def fetch_channel(
         try:
             resp = session.get(url, timeout=20, allow_redirects=False)
         except requests.RequestException as e:
+            if raise_errors:
+                raise ChannelFetchError(f"{channel}: request failed: {e}") from e
             log.warning("%s: request failed: %s", channel, e)
             break
         if resp.status_code != 200:
             # a redirect here means the channel is private, renamed or does not exist
+            if raise_errors:
+                raise ChannelFetchError(f"{channel}: HTTP {resp.status_code} for {url} — is the channel public?")
             log.warning("%s: HTTP %s — is the channel public? (%s)", channel, resp.status_code, url)
             break
         posts, min_id = parse_page(resp.text, channel)

@@ -1,9 +1,18 @@
 # Pipeline — Kazakhstan IT job data
 
-## Daily collector (main flow — no LLM, no API keys)
+## Daily ETL (main flow — no LLM, no API keys)
 
-`run_daily.py` collects vacancies from public Telegram channels, extracts the job
-fields with rules, and saves them to the jobs database that the backend reads.
+The ETL steps live in `etl.py`. **Airflow** runs them every day (`../airflow/dags/seekjobs_daily.py`,
+started by `docker compose up`); `run_daily.py` runs the same steps from the command line.
+
+| Step | What it does |
+|---|---|
+| `extract_<channel>` | fetch the channel; save new posts; re-read the last 7 days to notice **edited** and **deleted** posts |
+| `transform_load` | new / changed posts → vacancy filter + rules → `jobs`; posts edited to "вакансия закрыта" or deleted → job hidden |
+| `expire_old_jobs` | hide jobs posted more than 45 days ago |
+| `quality_check` | **fails** if no channel posted for 3 days or < 20 % of this week's posts look like vacancies (Telegram layout / rules broke); **warns** about silent channels and low city / skills coverage |
+
+Every hidden job keeps its reason in `jobs.inactive_reason` (`expired`, `closed`, `deleted`).
 
 ```text
 Telegram channels (t.me/s/<name>)  →  scrapers/telegram.py      fetch new posts (public web preview)
@@ -17,8 +26,9 @@ backend/services/data_loader.py    ←  reads active jobs from the last 45 days,
 ```bash
 cd pipeline
 pip install -r requirements.txt     # 5 small libraries, Python 3.10+
-python run_daily.py                 # first run: last 30 days of every channel (~1 minute)
-python run_daily.py                 # later runs: only new posts
+python run_daily.py                 # all steps; first run: last 30 days of every channel (~1 minute)
+python run_daily.py                 # later runs: new posts + re-check of the last 7 days
+python run_daily.py extract         # or one step: extract | transform | expire | check
 python run_daily.py --days 60       # look further back on a channel's first run
 python run_daily.py --reextract     # re-run extraction on all saved posts (after improving the rules)
 ```
@@ -28,7 +38,7 @@ python run_daily.py --reextract     # re-run extraction on all saved posts (afte
 (`https://t.me/s/<name>` must open in a browser). hh.kz is not used: its API now requires
 a registered application.
 
-**Run it every day** — Docker does this for you (`collector` service). Without Docker, on Windows:
+**Run it every day** — with Docker, Airflow does this (UI at http://localhost:8088). Without Docker, on Windows:
 
 ```bat
 schtasks /Create /SC DAILY /ST 09:00 /TN "SeekJobs collector" ^
@@ -47,8 +57,10 @@ become one job. Raw posts are kept, so an LLM pass can improve this later.
 
 ```text
 pipeline/
-├── run_daily.py         daily collector (above)
+├── etl.py               the ETL steps (used by Airflow and run_daily.py)
+├── run_daily.py         command line for the ETL
 ├── db.py                database tables + helpers (SQLite by default, Postgres via DATABASE_URL)
+├── alerts.py            optional Telegram alert when the ETL fails
 ├── scrapers/            telegram.py, telegram_channels.txt, older source notebooks
 ├── extract/             rules.py (job fields), skills.py (shared with backend — keep identical)
 ├── tests/               pytest (no network)

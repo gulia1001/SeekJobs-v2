@@ -100,3 +100,23 @@ def test_channels_file_format(tmp_path):
 def test_real_channels_file_has_requested_channels():
     handles = {c.handle for c in load_channels()}
     assert {"itvacancykz", "devkz_jobs", "halyk_jumys"} <= handles
+
+
+def test_errors_raise_when_asked():
+    """Airflow uses raise_errors=True so a failed fetch fails the task (and is retried)."""
+    import pytest
+    from scrapers.telegram import ChannelFetchError
+
+    class Broken(FakeSession):
+        def get(self, url, **_):
+            return FakeResponse("", status=500)
+
+    with pytest.raises(ChannelFetchError, match="HTTP 500"):
+        fetch_channel("devkz_jobs", since=datetime(2026, 1, 1), session=Broken({}), delay=0, raise_errors=True)
+
+
+def test_alerts_without_configuration_do_not_fail(monkeypatch):
+    from alerts import send_alert
+
+    monkeypatch.delenv("ALERT_TELEGRAM_BOT_TOKEN", raising=False)
+    assert send_alert("test") is False

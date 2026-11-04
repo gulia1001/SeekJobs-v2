@@ -1,11 +1,45 @@
-# Run everything:  docker compose up --build
-# Then open http://localhost:3001  (API: http://localhost:8001/api/health)
+# Run everything:  docker compose up --build -d
+#   Website        http://localhost:3001
+#   API            http://localhost:8001/api/health
+#   Airflow (ETL)  http://localhost:8088   login: admin / admin  (change in .env)
 #
-#   db         Postgres with the jobs table
-#   collector  collects vacancies from Telegram channels at start and then once a day
-#   backend    FastAPI (matching, CV generation)
-#   frontend   Next.js
+#   db                     Postgres: "seekjobs" database (jobs) + "airflow" database (Airflow's own)
+#   airflow-*              runs the daily vacancy ETL (airflow/dags/seekjobs_daily.py) at 08:00 Almaty
+#   backend / frontend     the app
+#
+# Airflow needs ~3 GB of RAM for Docker. Without Airflow: `docker compose up db backend frontend`
+# and run `python pipeline/run_daily.py` once a day yourself.
 x-database-url: &database-url postgresql+psycopg://seekjobs:${POSTGRES_PASSWORD:-seekjobs-local}@db:5432/seekjobs
+
+x-airflow-common: &airflow-common
+  build:
+    context: ./airflow
+    additional_contexts:
+      pipeline: ./pipeline
+  image: seekjobs-airflow:3.3.2
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://seekjobs:${POSTGRES_PASSWORD:-seekjobs-local}@db:5432/airflow
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:-seekjobs-local-jwt-secret}
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    # the ETL code and the jobs database
+    SEEKJOBS_PIPELINE_DIR: /opt/airflow/pipeline
+    DATABASE_URL: *database-url
+    ALERT_TELEGRAM_BOT_TOKEN: ${ALERT_TELEGRAM_BOT_TOKEN:-}
+    ALERT_TELEGRAM_CHAT_ID: ${ALERT_TELEGRAM_CHAT_ID:-}
+    PYTHONDONTWRITEBYTECODE: "1"
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./pipeline:/opt/airflow/pipeline:ro
+    - airflow-logs:/opt/airflow/logs
+  depends_on: &airflow-depends-on
+    db:
+      condition: service_healthy
 
 services:
   db:
@@ -16,19 +50,56 @@ services:
       POSTGRES_DB: seekjobs
     volumes:
       - db-data:/var/lib/postgresql/data
+      - ./infra/postgres/create-airflow-db.sql:/docker-entrypoint-initdb.d/10-create-airflow-db.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U seekjobs"]
       interval: 5s
       retries: 10
 
-  collector:
-    build: ./pipeline
+  airflow-init:  # one-off: create Airflow's tables and the admin user
+    <<: *airflow-common
+    command: version
     environment:
-      DATABASE_URL: *database-url
-    depends_on:
-      db:
-        condition: service_healthy
+      <<: *airflow-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
+
+  airflow-apiserver:  # web UI + API
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "${AIRFLOW_PORT:-8088}:8080"  # 8080 is often taken on Windows
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     restart: unless-stopped
+    depends_on:
+      <<: *airflow-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:  # starts the daily run; LocalExecutor runs the tasks here
+    <<: *airflow-common
+    command: scheduler
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-dag-processor:  # reads airflow/dags/
+    <<: *airflow-common
+    command: dag-processor
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-depends-on
+      airflow-init:
+        condition: service_completed_successfully
 
   backend:
     build: ./backend
@@ -58,3 +129,4 @@ services:
 
 volumes:
   db-data:
+  airflow-logs:
