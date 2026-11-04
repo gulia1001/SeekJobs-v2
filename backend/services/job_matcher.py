@@ -148,6 +148,15 @@ async def match_jobs(
     return result
 
 
+def get_job(job_id: str) -> dict | None:
+    """One job from the current dataset by id, or None if it is gone (expired, closed, deleted)."""
+    df = load_jobs()
+    if df.empty or "id" not in df.columns:
+        return None
+    rows = df[df["id"].astype(str) == str(job_id)]
+    return _row_to_job(rows.iloc[0]) if len(rows) else None
+
+
 def _default_reason(m: dict) -> str:
     return f"You have {len(m['skills_matched'])} of {m['skills_required']} skills this job asks for."
 

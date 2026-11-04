@@ -1,15 +1,8 @@
 'use client'
+import { useI18n, type MessageKey } from '@/lib/i18n'
 
 export const ROLES = [
-  { label: 'Software Engineering', value: 'software_engineering' },
-  { label: 'DevOps', value: 'devops' },
-  { label: 'Analytics', value: 'analytics' },
-  { label: 'Data / ML', value: 'data' },
-  { label: 'QA', value: 'qa' },
-  { label: 'Security', value: 'security' },
-  { label: 'Design', value: 'design' },
-  { label: 'Product', value: 'product' },
-  { label: 'Management', value: 'management' },
+  'software_engineering', 'devops', 'analytics', 'data', 'qa', 'security', 'design', 'product', 'management',
 ]
 
 interface Props {
@@ -18,24 +11,22 @@ interface Props {
 }
 
 export default function RoleSelector({ selected, onChange }: Props) {
+  const { t } = useI18n()
   const toggle = (value: string) => {
-    if (selected.includes(value)) {
-      onChange(selected.filter((r) => r !== value))
-    } else {
-      onChange([...selected, value])
-    }
+    onChange(selected.includes(value) ? selected.filter((r) => r !== value) : [...selected, value])
   }
 
   return (
     <div className="role-selector">
       {ROLES.map((r) => (
         <button
-          key={r.value}
-          className={`role-tag${selected.includes(r.value) ? ' selected' : ''}`}
-          onClick={() => toggle(r.value)}
+          key={r}
+          className={`role-tag${selected.includes(r) ? ' selected' : ''}`}
+          onClick={() => toggle(r)}
           type="button"
+          aria-pressed={selected.includes(r)}
         >
-          {r.label}
+          {t(`cat.${r}` as MessageKey)}
         </button>
       ))}
     </div>

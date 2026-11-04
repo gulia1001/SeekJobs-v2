@@ -27,3 +27,6 @@ pipeline/data/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# App data (accounts) when running locally without DATABASE_URL
+backend/data/

@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import type { GeneratedCV } from '@/lib/types'
 import { exportCV } from '@/lib/api'
+import { useI18n } from '@/lib/i18n'
 
 function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
@@ -24,6 +25,7 @@ interface Props {
 }
 
 export default function CVModal({ cv, jobTitle, company, onClose }: Props) {
+  const { t } = useI18n()
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', handleKey)
@@ -41,7 +43,7 @@ export default function CVModal({ cv, jobTitle, company, onClose }: Props) {
     try {
       saveBlob(await exportCV(cv, format), `${fileBase}.${format}`)
     } catch (e: unknown) {
-      setDownloadError(e instanceof Error ? e.message : 'Download failed')
+      setDownloadError(t('cv.downloadFailed', { msg: e instanceof Error ? e.message : String(e) }))
     } finally {
       setDownloading('')
     }
@@ -56,14 +58,14 @@ export default function CVModal({ cv, jobTitle, company, onClose }: Props) {
     <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
       <div className="modal">
         <div className="modal-header">
-          <div className="modal-title">Tailored CV — {jobTitle}</div>
-          <button className="modal-close" onClick={onClose}>✕</button>
+          <div className="modal-title">{t('cv.title', { job: jobTitle })}</div>
+          <button className="modal-close" onClick={onClose} aria-label={t('cv.close')}>✕</button>
         </div>
         <div className="modal-body">
           {!cv ? (
             <div className="cv-loading">
               <div className="loading-spinner" />
-              Generating your tailored CV...
+              {t('cv.generating')}
             </div>
           ) : (
             <>
@@ -74,7 +76,7 @@ export default function CVModal({ cv, jobTitle, company, onClose }: Props) {
                   onClick={() => download('pdf')}
                   disabled={downloading !== ''}
                 >
-                  {downloading === 'pdf' ? 'Preparing…' : '⬇ Download PDF'}
+                  {downloading === 'pdf' ? t('cv.preparing') : t('cv.pdf')}
                 </button>
                 <button
                   className="btn-ghost"
@@ -82,7 +84,7 @@ export default function CVModal({ cv, jobTitle, company, onClose }: Props) {
                   onClick={() => download('docx')}
                   disabled={downloading !== ''}
                 >
-                  {downloading === 'docx' ? 'Preparing…' : '⬇ Word'}
+                  {downloading === 'docx' ? t('cv.preparing') : t('cv.word')}
                 </button>
                 {cv.latex && (
                   <button
@@ -98,15 +100,16 @@ export default function CVModal({ cv, jobTitle, company, onClose }: Props) {
                   style={{ flex: 1, padding: '10px', fontSize: 12, opacity: 0.7 }}
                   onClick={onClose}
                 >
-                  Close
+                  {t('cv.close')}
                 </button>
               </div>
+              {cv.ai_limit_reached && <div className="form-note">ℹ {t('cv.limit')}</div>}
               {downloadError && (
                 <div style={{ color: 'var(--accent)', fontSize: 12, margin: '4px 0 8px' }}>⚠ {downloadError}</div>
               )}
 
               <div id="cv-print-area" className="cv-preview">
-                <div className="cv-name">{cv.name || 'Your Name'}</div>
+                <div className="cv-name">{cv.name}</div>
                 <div className="cv-role">{cv.role}</div>
 
                 <div className="cv-contact">
@@ -115,12 +118,12 @@ export default function CVModal({ cv, jobTitle, company, onClose }: Props) {
                   {cv.github && <span className="cv-contact-item">💻 <a href={cv.github} target="_blank" rel="noopener noreferrer">GitHub</a></span>}
                 </div>
 
-                <div className="cv-section-title">Professional Summary</div>
+                <div className="cv-section-title">{t('cv.summary')}</div>
                 <div style={{ fontSize: 12, color: '#444', lineHeight: 1.8 }}>{cv.summary}</div>
 
                 {(cv.experience?.length ?? 0) > 0 && (
                   <>
-                    <div className="cv-section-title">Experience</div>
+                    <div className="cv-section-title">{t('cv.experience')}</div>
                     {cv.experience?.map((exp, i) => (
                       <div className="cv-entry" key={i}>
                         <div className="cv-entry-title">
@@ -135,7 +138,7 @@ export default function CVModal({ cv, jobTitle, company, onClose }: Props) {
 
                 {(cv.projects?.length ?? 0) > 0 && (
                   <>
-                    <div className="cv-section-title">Key Projects (GitHub)</div>
+                    <div className="cv-section-title">{t('cv.projects')}</div>
                     {cv.projects?.map((proj, i) => (
                       <div className="cv-entry" key={i}>
                         <div className="cv-entry-title">
@@ -150,7 +153,7 @@ export default function CVModal({ cv, jobTitle, company, onClose }: Props) {
 
                 {(cv.education?.length ?? 0) > 0 && (
                   <>
-                    <div className="cv-section-title">Education</div>
+                    <div className="cv-section-title">{t('cv.education')}</div>
                     {cv.education?.map((edu, i) => (
                       <div className="cv-entry" key={i}>
                         <div className="cv-entry-title">
@@ -165,7 +168,7 @@ export default function CVModal({ cv, jobTitle, company, onClose }: Props) {
 
                 {(cv.skills?.length ?? 0) > 0 && (
                   <>
-                    <div className="cv-section-title">Technical Skills</div>
+                    <div className="cv-section-title">{t('cv.skills')}</div>
                     <div className="cv-skills-grid">
                       {cv.skills?.map((s) => <span className="cv-skill" key={s}>{s}</span>)}
                     </div>
@@ -174,7 +177,7 @@ export default function CVModal({ cv, jobTitle, company, onClose }: Props) {
 
                 {(cv.certificates?.length ?? 0) > 0 && (
                   <>
-                    <div className="cv-section-title">Certifications</div>
+                    <div className="cv-section-title">{t('cv.certs')}</div>
                     <ul className="cv-list">
                       {cv.certificates?.map((cert, i) => <li key={i}>{cert}</li>)}
                     </ul>
@@ -182,12 +185,12 @@ export default function CVModal({ cv, jobTitle, company, onClose }: Props) {
                 )}
 
                 <div className="cv-tailored-note">
-                  ✨ This CV was tailored specifically for <strong>{jobTitle}</strong> at <strong>{company}</strong>. Keywords, skill order, and experience framing are optimised for this role. This is a one-page document optimised for ATS scanning.
+                  ✨ {t('cv.note', { job: jobTitle, company: company || '—' })}
                 </div>
 
                 {cv.latex && (
                   <div className="cv-latex-notice" style={{ marginTop: 16, padding: 8, backgroundColor: '#f5f5f5', borderRadius: 4, fontSize: 11, color: '#666', textAlign: 'center' }}>
-                    💾 A pro-level .TEX file is also ready. You can download it to use on Overleaf.
+                    💾 {t('cv.texNote')}
                   </div>
                 )}
               </div>

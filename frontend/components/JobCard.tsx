@@ -1,41 +1,45 @@
 'use client'
 import { useState } from 'react'
 import type { Job } from '@/lib/types'
-import { postedAgo } from '@/lib/time'
-
-function formatSalary(job: Job): string {
-  if (!job.salary_from && !job.salary_to) return 'Salary not listed'
-  const cur = job.currency === 'KZT' ? '₸' : job.currency === 'USD' ? '$' : job.currency
-  const fmt = (n: number) => n >= 1000 ? `${Math.round(n / 1000)}K` : String(n)
-  if (job.salary_from && job.salary_to) return `${cur}${fmt(job.salary_from)} – ${fmt(job.salary_to)}`
-  if (job.salary_from) return `from ${cur}${fmt(job.salary_from)}`
-  return `up to ${cur}${fmt(job.salary_to!)}`
-}
+import { formatTenge, usePostedAgo, useI18n, type MessageKey } from '@/lib/i18n'
 
 const FORMAT_EMOJI: Record<string, string> = {
   remote: '🌍', hybrid: '🔀', office: '🏢',
 }
 
 export default function JobCard({ job }: { job: Job }) {
+  const { t } = useI18n()
+  const postedAgo = usePostedAgo()
   const [expanded, setExpanded] = useState(false)
 
+  const cur = job.currency === 'KZT' ? '₸' : job.currency === 'USD' ? '$' : job.currency
+  const salary = !job.salary_from && !job.salary_to
+    ? t('job.salaryNotListed')
+    : job.salary_from && job.salary_to && job.salary_from !== job.salary_to
+      ? `${formatTenge(job.salary_from)} – ${formatTenge(job.salary_to)} ${cur}`
+      : job.salary_from
+        ? (job.salary_to ? `${formatTenge(job.salary_from)} ${cur}` : t('job.from', { v: `${formatTenge(job.salary_from)} ${cur}` }))
+        : t('job.upTo', { v: `${formatTenge(job.salary_to!)} ${cur}` })
+  const label = (prefix: 'cat' | 'level' | 'format', value: string) =>
+    value ? t(`${prefix}.${value}` as MessageKey) : ''
+  const posted = postedAgo(job.posted_at)
+
   return (
-    <div 
+    <div
       className={`job-card${expanded ? ' expanded' : ''}`}
       onClick={() => setExpanded(!expanded)}
     >
       <div className="job-top">
         <div className="job-logo">{FORMAT_EMOJI[job.work_format] ?? '💼'}</div>
         <div className="job-badges">
-          <span className={`badge badge-${job.work_format}`}>{job.work_format}</span>
-          <span className={`badge badge-${job.level}`}>{job.level}</span>
+          {job.work_format && <span className={`badge badge-${job.work_format}`}>{label('format', job.work_format)}</span>}
+          {job.level && job.level !== 'unknown' && <span className={`badge badge-${job.level}`}>{label('level', job.level)}</span>}
         </div>
       </div>
 
       <div className="job-title">{job.title}</div>
       <div className="job-company">
-        {[job.company, job.city, postedAgo(job.posted_at) && `posted ${postedAgo(job.posted_at)}`]
-          .filter(Boolean).join(' · ')}
+        {[job.company, job.city, posted && t('job.posted', { when: posted })].filter(Boolean).join(' · ')}
       </div>
 
       {job.description && (
@@ -55,29 +59,23 @@ export default function JobCard({ job }: { job: Job }) {
         <div className="job-full-details">
           {job.description && (
             <>
-              <div className="job-section-title">Job Description</div>
+              <div className="job-section-title">{t('job.description')}</div>
               <div className="job-description-full" style={{ whiteSpace: 'pre-line' }}>{job.description}</div>
             </>
           )}
-          
-          <div className="job-section-title">Salary Details</div>
+
+          <div className="job-section-title">{t('job.info')}</div>
           <ul className="job-list">
-            <li>Amount: {formatSalary(job)}</li>
-            <li>Currency: {job.currency}</li>
+            <li>{t('job.category')}: {label('cat', job.category)}</li>
+            {job.level && job.level !== 'unknown' && <li>{t('job.level')}: {label('level', job.level)}</li>}
+            {job.work_format && <li>{t('job.format')}: {label('format', job.work_format)}</li>}
+            {job.city && <li>{t('job.location')}: {job.city}</li>}
+            <li>{t('job.source')}: {job.source}</li>
           </ul>
 
-          <div className="job-section-title">Job Info</div>
-          <ul className="job-list">
-            <li>Category: {job.category}</li>
-            <li>Level: {job.level}</li>
-            <li>Format: {job.work_format}</li>
-            <li>Location: {job.city}</li>
-            <li>Source: {job.source}</li>
-          </ul>
-          
           {job.skills.length > 0 && (
             <>
-              <div className="job-section-title">Required Skills ({job.skills.length})</div>
+              <div className="job-section-title">{t('job.skills', { n: job.skills.length })}</div>
               <div className="job-skills-full">
                 {job.skills.map((s) => <span key={s} className="skill-tag-full">{s}</span>)}
               </div>
@@ -88,18 +86,15 @@ export default function JobCard({ job }: { job: Job }) {
 
       <div className="job-bottom">
         <div>
-          <div className="job-salary">{formatSalary(job)}</div>
-          <div className="job-meta">{job.category}</div>
+          <div className="job-salary">{salary}</div>
+          <div className="job-meta">{label('cat', job.category)}</div>
         </div>
-        <button
-          className="job-expand-btn"
-          onClick={(e) => {
-            e.stopPropagation()
-            if (job.url) window.open(job.url, '_blank')
-          }}
-        >
-          View Details →
-        </button>
+        {job.url && (
+          <a className="job-expand-btn" href={job.url} target="_blank" rel="noopener noreferrer"
+             onClick={(e) => e.stopPropagation()}>
+            {t('job.open')}
+          </a>
+        )}
       </div>
     </div>
   )

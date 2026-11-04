@@ -1,7 +1,15 @@
 'use client'
 import { useEffect, useRef } from 'react'
+import { useI18n } from '@/lib/i18n'
+
+const STEPS = [
+  { n: '01', icon: '📄', title: 'steps.1.title', text: 'steps.1.text' },
+  { n: '02', icon: '🎯', title: 'steps.2.title', text: 'steps.2.text' },
+  { n: '03', icon: '✨', title: 'steps.3.title', text: 'steps.3.text' },
+] as const
 
 export default function HowItWorks() {
+  const { t } = useI18n()
   const ref = useRef<HTMLElement>(null)
 
   useEffect(() => {
@@ -17,25 +25,17 @@ export default function HowItWorks() {
 
   return (
     <section className="steps-section reveal" ref={ref}>
-      <div className="section-label">How It Works</div>
-      <h2>Three steps to your<br /><em>next opportunity</em></h2>
+      <div className="section-label">{t('steps.label')}</div>
+      <h2>{t('steps.title1')}<br /><em>{t('steps.title2')}</em></h2>
 
       <div className="steps-grid">
-        <div className="step" data-n="01">
-          <div className="step-icon">📄</div>
-          <h3>Upload Your Profile</h3>
-          <p>Share your CV, LinkedIn URL, and GitHub profile. Our AI extracts your skills, experience, and achievements across all sources.</p>
-        </div>
-        <div className="step" data-n="02">
-          <div className="step-icon">🎯</div>
-          <h3>Pick Your Roles</h3>
-          <p>Select one or more target tracks — DevOps, Backend, Data Engineer, and more. Our engine ranks every KZ IT vacancy against your profile.</p>
-        </div>
-        <div className="step" data-n="03">
-          <div className="step-icon">✨</div>
-          <h3>Get Tailored CVs</h3>
-          <p>For each matched role you get an AI-rewritten CV — keywords, skill order, and framing optimised for that specific job and stack.</p>
-        </div>
+        {STEPS.map((s) => (
+          <div className="step" data-n={s.n} key={s.n}>
+            <div className="step-icon">{s.icon}</div>
+            <h3>{t(s.title)}</h3>
+            <p>{t(s.text)}</p>
+          </div>
+        ))}
       </div>
     </section>
   )

@@ -16,7 +16,8 @@ logging.basicConfig(
 )
 log = logging.getLogger("seekjobs")
 
-from routers import jobs, analyze, cv  # noqa: E402  (load .env before services read it)
+from routers import account, analyze, cv, jobs, stats  # noqa: E402  (load .env before services read it)
+from services import app_db  # noqa: E402
 from services.data_loader import load_jobs  # noqa: E402
 
 # Comma-separated list of sites allowed to call the API from a browser.
@@ -31,6 +32,7 @@ CORS_ORIGINS = [
 async def lifespan(app: FastAPI):
     # load the job dataset once at startup instead of on the first user's request
     df = await asyncio.to_thread(load_jobs)
+    await asyncio.to_thread(app_db.get_engine)  # create / upgrade the accounts tables
     log.info("Jobs loaded: %d  |  CORS origins: %s", len(df), CORS_ORIGINS)
     yield
 
@@ -40,7 +42,7 @@ app = FastAPI(title="SeekJobs API", lifespan=lifespan, redirect_slashes=False)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["*"],
     expose_headers=["Content-Disposition"],
 )
@@ -48,6 +50,8 @@ app.add_middleware(
 app.include_router(jobs.router, prefix="/api")
 app.include_router(analyze.router, prefix="/api")
 app.include_router(cv.router, prefix="/api")
+app.include_router(stats.router, prefix="/api")
+app.include_router(account.router, prefix="/api")
 
 
 @app.get("/api/health")

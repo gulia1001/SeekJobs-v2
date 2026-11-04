@@ -1,12 +1,14 @@
 """CV endpoints: generate a tailored CV for a job, export it to PDF / Word."""
 import asyncio
+import os
 import re
 from typing import Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel
 
+from services.auth import llm_limiter, optional_user
 from services.cv_export import export_filename, to_docx, to_pdf
 from services.cv_generator import generate_tailored_cv
 
@@ -32,13 +34,21 @@ class CVExportRequest(BaseModel):
 
 
 @router.post("/cv/generate")
-async def generate_cv(req: CVRequest):
-    return await generate_tailored_cv(
+async def generate_cv(req: CVRequest, request: Request, user: dict | None = Depends(optional_user)):
+    # AI spending limit: LLM_DAILY_LIMIT AI-written CVs per user (or per IP when logged out) per day;
+    # after that the CV is built from the user's data without the LLM
+    llm_configured = bool(os.getenv("GROQ_API_KEY"))
+    key = f"user:{user['id']}" if user else f"ip:{request.client.host if request.client else '?'}"
+    use_llm = llm_configured and llm_limiter.allow(key)
+    cv = await generate_tailored_cv(
         job_title=req.job_title,
         job_skills=req.job_skills,
         user_profile=req.user_profile,
         cv_text=req.cv_text,
+        use_llm=use_llm,
     )
+    cv["ai_limit_reached"] = llm_configured and not use_llm
+    return cv
 
 
 @router.post("/cv/export")

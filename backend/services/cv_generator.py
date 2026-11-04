@@ -15,9 +15,10 @@ async def generate_tailored_cv(
     user_profile: dict,
     cv_text: str = "",
     output_format: str = "both",
+    use_llm: bool = True,
 ) -> dict:
     groq_key = os.getenv("GROQ_API_KEY")
-    if not groq_key:
+    if not groq_key or not use_llm:
         return _fallback_cv(job_title, job_skills, user_profile, cv_text=cv_text)
 
     client = AsyncGroq(api_key=groq_key)

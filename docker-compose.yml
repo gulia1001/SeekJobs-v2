@@ -5,7 +5,8 @@
 #
 #   db                     Postgres: "seekjobs" database (jobs) + "airflow" database (Airflow's own)
 #   airflow-*              runs the daily vacancy ETL (airflow/dags/seekjobs_daily.py) at 08:00 Almaty
-#   backend / frontend     the app
+#   backend / frontend     the app (accounts and the tracker live in the same Postgres)
+#   bot                    Telegram bot (only runs when TELEGRAM_BOT_TOKEN is set in .env)
 #
 # Airflow needs ~3 GB of RAM for Docker. Without Airflow: `docker compose up db backend frontend`
 # and run `python pipeline/run_daily.py` once a day yourself.
@@ -113,6 +114,22 @@ services:
       - ./pipeline/data:/data:ro   # optional older CSV dataset (used only if the database is empty)
     ports:
       - "8001:8001"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  bot:  # Telegram bot: account linking + new matches every morning at 09:00 Almaty
+    build: ./backend
+    command: python telegram_bot.py   # exits quietly when TELEGRAM_BOT_TOKEN is not set
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: *database-url
+      DATA_DIR: /data
+    volumes:
+      - ./pipeline/data:/data:ro
+    restart: on-failure
     depends_on:
       db:
         condition: service_healthy

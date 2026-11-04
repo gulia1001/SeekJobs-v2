@@ -1,11 +1,15 @@
+'use client'
+import { useI18n } from '@/lib/i18n'
+import { Logo } from './Nav'
+
 export default function Footer() {
+  const { t } = useI18n()
   return (
     <footer>
-      <div className="footer-logo">
-        <div className="logo-dot" />
-        Job<em style={{ fontFamily: "'Instrument Serif', serif", fontStyle: 'italic', color: 'var(--accent)' }}>SeekJobs</em>
+      <div className="footer-logo"><Logo /></div>
+      <div className="footer-copy">
+        {t('footer.copy')} · <a href="/privacy">{t('footer.privacy')}</a>
       </div>
-      <div className="footer-copy">© 2026 SeekJobs · KZ IT Market Intelligence</div>
     </footer>
   )
 }

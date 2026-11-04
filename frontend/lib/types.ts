@@ -49,6 +49,7 @@ export interface UserProfile {
   top_repos: { name: string; description: string; stack: string[]; stars: number; url: string }[]
   certifications: { name: string; authority: string }[]
   cv_text?: string
+  level?: string
 }
 
 export interface AnalysisResult {
@@ -79,6 +80,53 @@ export interface GeneratedCV {
   projects?: Array<{ name: string; description: string; tech: string }>
   latex: string
   tailored_note: string
+  ai_limit_reached?: boolean
+}
+
+export interface Stats {
+  active_jobs: number
+  median_salary_kzt: number | null
+  sources: number
+  newest_post_at: string | null
+}
+
+export interface User {
+  id: number
+  email: string
+  name: string
+  language: 'ru' | 'kk' | 'en'
+}
+
+export interface SavedProfile {
+  skills: string[]
+  level: string
+  target_roles: string[]
+  preferred_salary: number | null
+  github_url: string
+  linkedin_url: string
+  has_cv_text: boolean
+  notify: boolean
+  updated_at: string
+}
+
+export interface Me {
+  user: User
+  profile: SavedProfile | null
+  telegram: { linked: boolean; bot_username: string }
+}
+
+export type ApplicationStatus = 'saved' | 'applied' | 'interview' | 'offer' | 'rejected'
+
+export interface Application {
+  id: number
+  job_id: string
+  title: string
+  company: string | null
+  url: string | null
+  status: ApplicationStatus
+  notes: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface JobsResponse {

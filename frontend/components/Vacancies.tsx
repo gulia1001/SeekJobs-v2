@@ -2,27 +2,14 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Job } from '@/lib/types'
 import { fetchJobs } from '@/lib/api'
+import { useI18n, type MessageKey } from '@/lib/i18n'
 import JobCard from './JobCard'
 
-const CATEGORIES = [
-  { label: 'All', value: 'all' },
-  { label: 'Software Eng', value: 'software_engineering' },
-  { label: 'DevOps', value: 'devops' },
-  { label: 'Analytics', value: 'analytics' },
-  { label: 'Data / ML', value: 'data' },
-  { label: 'QA', value: 'qa' },
-  { label: 'Security', value: 'security' },
-  { label: 'Design', value: 'design' },
-]
-
-const LEVELS = [
-  { label: 'All Levels', value: 'all' },
-  { label: 'Junior', value: 'junior' },
-  { label: 'Middle', value: 'middle' },
-  { label: 'Senior', value: 'senior' },
-]
+const CATEGORIES = ['all', 'software_engineering', 'devops', 'analytics', 'data', 'qa', 'security', 'design', 'product', 'management']
+const LEVELS = ['all', 'intern', 'junior', 'middle', 'senior', 'lead']
 
 export default function Vacancies() {
+  const { t } = useI18n()
   const ref = useRef<HTMLElement>(null)
   const [jobs, setJobs] = useState<Job[]>([])
   const [total, setTotal] = useState(0)
@@ -69,30 +56,30 @@ export default function Vacancies() {
     <section id="jobs" className="vacancies-section reveal" ref={ref}>
       <div className="vacancies-header">
         <div>
-          <div className="section-label">Open Positions</div>
-          <h2>Live <em>Vacancies</em></h2>
-          {total > 0 && <p style={{ color: 'var(--muted)', fontSize: 12, marginTop: 4 }}>{total.toLocaleString()} jobs found</p>}
+          <div className="section-label">{t('vac.label')}</div>
+          <h2>{t('vac.title1')} <em>{t('vac.title2')}</em></h2>
+          {total > 0 && <p style={{ color: 'var(--muted)', fontSize: 12, marginTop: 4 }}>{t('vac.found', { n: total })}</p>}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
           <div className="filter-tabs">
             {CATEGORIES.map((c) => (
               <button
-                key={c.value}
-                className={`filter-tab${category === c.value ? ' active' : ''}`}
-                onClick={() => handleCategory(c.value)}
+                key={c}
+                className={`filter-tab${category === c ? ' active' : ''}`}
+                onClick={() => handleCategory(c)}
               >
-                {c.label}
+                {t(`cat.${c}` as MessageKey)}
               </button>
             ))}
           </div>
           <div className="filter-tabs">
             {LEVELS.map((l) => (
               <button
-                key={l.value}
-                className={`filter-tab${level === l.value ? ' active' : ''}`}
-                onClick={() => handleLevel(l.value)}
+                key={l}
+                className={`filter-tab${level === l ? ' active' : ''}`}
+                onClick={() => handleLevel(l)}
               >
-                {l.label}
+                {t(`level.${l}` as MessageKey)}
               </button>
             ))}
           </div>
@@ -102,12 +89,12 @@ export default function Vacancies() {
       {loading ? (
         <div className="empty-state">
           <div className="loading-spinner" style={{ margin: '0 auto' }} />
-          <p>Loading vacancies...</p>
+          <p>{t('vac.loading')}</p>
         </div>
       ) : jobs.length === 0 ? (
         <div className="empty-state">
           <p style={{ fontSize: 32, opacity: 0.3 }}>🔍</p>
-          <p>No vacancies found. Run the Airflow pipeline to populate job data.</p>
+          <p>{t('vac.empty')}</p>
         </div>
       ) : (
         <>
@@ -122,7 +109,7 @@ export default function Vacancies() {
                 disabled={page === 1}
                 onClick={() => setPage((p) => p - 1)}
               >
-                ← Prev
+                {t('vac.prev')}
               </button>
               {Array.from({ length: Math.min(pages, 7) }, (_, i) => {
                 const p = i + 1
@@ -142,7 +129,7 @@ export default function Vacancies() {
                 disabled={page === pages}
                 onClick={() => setPage((p) => p + 1)}
               >
-                Next →
+                {t('vac.next')}
               </button>
             </div>
           )}
